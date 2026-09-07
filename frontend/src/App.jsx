@@ -606,16 +606,30 @@ function useSimulationRunner({ machine, tasks, setHistory }) {
     const betterApproach = gbfsBetter ? "GBFS" : "PSO";
     const chosen = gbfsBetter ? g : p;
 
+    // The backend's /offload endpoint still expects the original
+    // single-task payload shape (gbfsLatency/psoLatency/targetServer/
+    // taskSize) — it hasn't been updated for batches. We send the
+    // batch's aggregate avg latencies under those exact keys, target
+    // whichever server the chosen approach allocated the majority of
+    // tasks to, and post directly to THAT server's baseUrl (matching
+    // the original single-task behavior instead of always hitting A).
+    const totalTaskSize = tasks.reduce((a, t) => a + t.taskSize, 0);
+    const primaryServerKey = chosen.edgeTasks >= chosen.cloudTasks ? "A" : "B";
+    const targetSrv = resolveServer(primaryServerKey);
+
     setOffloading(true); setOffloadError(null);
     try {
       const MIN_DISPLAY_MS = 2200;
       const [result] = await Promise.all([
-        apiFetch(SERVERS.A.baseUrl, "/offload", {
+        apiFetch(targetSrv.baseUrl, "/offload", {
           method: "POST",
           body: JSON.stringify({
-            machineId: machine.machineId, taskCount: tasks.length, algorithm: betterApproach,
-            avgLatencyMs: chosen.avgLatencyMs, edgeTasks: chosen.edgeTasks, cloudTasks: chosen.cloudTasks,
-            totalEnergy: chosen.totalEnergy, loadBalanceScore: chosen.loadBalanceScore,
+            machineId: machine.machineId,
+            taskSize: +totalTaskSize.toFixed(2),
+            algorithm: betterApproach,
+            targetServer: targetSrv.label,
+            gbfsLatency: g.avgLatencyMs,
+            psoLatency: p.avgLatencyMs,
           }),
         }),
         delay(MIN_DISPLAY_MS),
