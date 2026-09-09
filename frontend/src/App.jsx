@@ -149,6 +149,30 @@ const applyWorkloadTier = (machine, tier) => {
   return { ...machine, ...overrides };
 };
 
+/**
+ * TASK BATCH GENERATION
+ * GBFS and PSO now run against a BATCH of tasks rather than one — this
+ * is what actually lets the two algorithms diverge (PSO searches whole
+ * allocation vectors; GBFS decides greedily task-by-task). The batch is
+ * generated deterministically (fixed multiplier spread, not random) from
+ * whichever reference size is currently selected: the chosen workload
+ * tier if one is picked, or the machine's live-fetched values otherwise
+ * ("Live Data"). `machine` (tier-merged) is kept as-is elsewhere in the
+ * file purely as the "Current System" baseline for comparison charts —
+ * it is no longer what's fed into the algorithms.
+ */
+const TASK_SIZE_MULTIPLIERS = [0.55, 0.75, 0.9, 1.0, 1.1, 1.25, 1.4, 0.85];
+
+const generateTaskBatch = (base) => {
+  if (!base) return [];
+  return TASK_SIZE_MULTIPLIERS.map((mult, i) => ({
+    taskIndex: i + 1,
+    taskSize: +(base.taskSize * mult).toFixed(2),
+    queueLength: Math.max(0, (base.queueLength || 0) + (i % 3)),
+    throughput: base.throughput || 20,
+  }));
+};
+
 const GBFS_STEPS = ["Task Input", "Identify Candidates", "Evaluate Heuristic", "Compare Nodes", "Select Best", "Decision"];
 const PSO_STEPS = ["Task Input", "Init Particles", "Evaluate Fitness", "Update Bests", "Update Positions", "Converge", "Decision"];
 const GBFS_GRAPH_STEPS = ["Task Input", "Identify", "Evaluate", "Compare", "Select", "Decision"];
@@ -194,10 +218,6 @@ const saveHistory = (history) => {
 ─────────────────────────────────────────────── */
 /**
  * SECTION 1 — THESIS SYSTEM CONSTANTS (per the revision guide).
- * These replace the old made-up SERVER_PROFILES weighting factors with
- * the actual Chapter-3 physical model: fixed processing speeds, fixed
- * network latency per server, one shared bandwidth, and per-server
- * resource capacities.
  */
 const P_EDGE = 20;     // MB/s — Edge processing speed
 const P_CLOUD = 50;    // MB/s — Cloud processing speed
@@ -224,23 +244,24 @@ class SeededRandom {
   nextFloat(min, max) { return min + this.next() * (max - min); }
 }
 
-/* SECTION 3 — server physics profiles (replaces the old fake weighting). */
+/* SECTION 3 — server physics profiles. */
 const SERVER_PROFILES = {
   A: { label: "Edge Server A", speed: P_EDGE, networkLatency: N_EDGE, capacity: CAPACITY_EDGE, energyCoefficient: 0.08, baseEnergy: 0.5, baseUtilization: 15 },
   B: { label: "Cloud Server B", speed: P_CLOUD, networkLatency: N_CLOUD, capacity: CAPACITY_CLOUD, energyCoefficient: 0.03, baseEnergy: 0.3, baseUtilization: 10 },
 };
 
 /**
- * SECTION 4/5 — evaluate one task against one server, using the real
- * latency formula: Total = Processing + Transmission + Network + Queue.
- * Output shape is unchanged from before ({ time, latency, utilization,
- * energy, throughput, queueLength, networkDelay, queueDelay,
+ * SECTION 4/5 — evaluate one task against one server given that server's
+ * CURRENT cumulative load (currentLoadMB), using the real latency formula:
+ * Total = Processing + Transmission + Network + Queue. Output shape is
+ * unchanged from before ({ time, latency, utilization, energy,
+ * throughput, queueLength, networkDelay, queueDelay,
  * resourceAvailability, heuristicScore }) so every panel/chart below
- * keeps working without modification — only the numbers are now real.
+ * keeps working without modification.
  */
-const evaluateCandidate = (machine, profile, currentLoadMB = 0) => {
-  const taskSize = machine.taskSize || 0;
-  const queueLength = machine.queueLength || 0;
+const evaluateCandidate = (task, profile, currentLoadMB = 0) => {
+  const taskSize = task.taskSize || 0;
+  const queueLength = task.queueLength || 0;
   const newLoadMB = currentLoadMB + taskSize;
 
   // Capacity constraint (Chapter 3): a server can't be assigned a task
@@ -265,140 +286,246 @@ const evaluateCandidate = (machine, profile, currentLoadMB = 0) => {
   const time = +processingTimeMs.toFixed(2);
   const latency = +(time + networkDelay + queueDelay).toFixed(2);
   const energy = +(profile.baseEnergy + taskSize * profile.energyCoefficient).toFixed(2);
-  const baseThroughput = machine.throughput || 20;
+  const baseThroughput = task.throughput || 20;
   const throughput = +(baseThroughput * (1 - (utilization / 100) * 0.3)).toFixed(1);
   const resourceAvailability = +(100 - utilization).toFixed(1);
-  // Composite ranking number GBFS compares nodes on (network 35% /
-  // compute 30% / queue 20% / load 15%) — same weighting as before,
-  // now computed on real physics-based ms values instead of fake ones.
   const heuristicScore = +(networkDelay * 0.35 + time * 0.3 + queueDelay * 0.2 + utilization * 0.15).toFixed(2);
 
   return { time, latency, utilization, energy, throughput, queueLength, networkDelay, queueDelay, resourceAvailability, heuristicScore, capacityExceeded: false };
 };
 
 /**
- * SECTION 6 — GBFS: evaluate both real candidates, take the lower
- * feasible latency. Single-shot, deterministic, no "winner" framing in
- * the decision text (Change 3/18) — the field is still called
- * `recommendedServer` because the execution panels below key off it.
+ * Evaluates ONE full allocation vector (which server each task in the
+ * batch goes to) end to end, tracking cumulative load per server as
+ * tasks are added, and returns the batch's AVERAGE metrics. Used both
+ * as PSO's fitness evaluator and to compute the two "pure" reference
+ * scenarios (all-Edge / all-Cloud) that the execution panels display as
+ * candidates.A / candidates.B.
  */
-const computeGBFS = (machine) => {
-  const A = evaluateCandidate(machine, SERVER_PROFILES.A);
-  const B = evaluateCandidate(machine, SERVER_PROFILES.B);
+const evaluateAllocationBatch = (tasks, allocation) => {
+  let edgeLoadMB = 0, cloudLoadMB = 0;
+  const sums = { latency: 0, time: 0, utilization: 0, energy: 0, throughput: 0, networkDelay: 0, queueDelay: 0 };
+  let feasible = true;
 
-  let recommendedServer;
-  if (A.capacityExceeded && !B.capacityExceeded) recommendedServer = "B";
-  else if (!A.capacityExceeded && B.capacityExceeded) recommendedServer = "A";
-  else recommendedServer = A.latency <= B.latency ? "A" : "B";
+  for (let i = 0; i < tasks.length; i++) {
+    const task = tasks[i];
+    const toEdge = allocation[i] === 0;
+    const profile = toEdge ? SERVER_PROFILES.A : SERVER_PROFILES.B;
+    const currentLoad = toEdge ? edgeLoadMB : cloudLoadMB;
+    const result = evaluateCandidate(task, profile, currentLoad);
+    if (result.capacityExceeded) { feasible = false; break; }
+    if (toEdge) edgeLoadMB += task.taskSize; else cloudLoadMB += task.taskSize;
+    sums.latency += result.latency; sums.time += result.time; sums.utilization += result.utilization;
+    sums.energy += result.energy; sums.throughput += result.throughput;
+    sums.networkDelay += result.networkDelay; sums.queueDelay += result.queueDelay;
+  }
 
-  const chosen = recommendedServer === "A" ? A : B;
-  const other = recommendedServer === "A" ? B : A;
-  const otherLabel = resolveServer(recommendedServer === "A" ? "B" : "A").label;
+  if (!feasible) {
+    return { feasible: false, latency: 999999, time: 999999, utilization: 100, energy: 999.99, throughput: 0, networkDelay: 999999, queueDelay: 999999, resourceAvailability: 0, heuristicScore: 999999, edgeTasks: 0, cloudTasks: 0, edgeLoadMB: 0, cloudLoadMB: 0, loadBalanceScore: 0 };
+  }
+
+  const n = tasks.length;
+  const avg = (k) => +(sums[k] / n).toFixed(2);
+  const utilization = avg("utilization");
+  const totalLoad = edgeLoadMB + cloudLoadMB || 0.1;
 
   return {
-    candidates: { A, B },
-    recommendedServer,
-    latency: chosen.latency,
-    time: chosen.time,
-    utilization: chosen.utilization,
-    energy: chosen.energy,
-    throughput: chosen.throughput,
-    decisionReason: `${resolveServer(recommendedServer).label} produced the lower computed latency (${chosen.latency} ms vs ${otherLabel}'s ${other.latency} ms) for this ${machine.taskSize} MB task.`,
+    feasible: true,
+    latency: avg("latency"), time: avg("time"), utilization, energy: avg("energy"), throughput: avg("throughput"),
+    networkDelay: avg("networkDelay"), queueDelay: avg("queueDelay"), resourceAvailability: +(100 - utilization).toFixed(1),
+    heuristicScore: +(avg("networkDelay") * 0.35 + avg("time") * 0.3 + avg("queueDelay") * 0.2 + utilization * 0.15).toFixed(2),
+    edgeTasks: allocation.filter((a) => a === 0).length, cloudTasks: allocation.filter((a) => a === 1).length,
+    edgeLoadMB: +edgeLoadMB.toFixed(1), cloudLoadMB: +cloudLoadMB.toFixed(1),
+    loadBalanceScore: +(100 * (1 - Math.abs(edgeLoadMB - cloudLoadMB) / totalLoad)).toFixed(1),
   };
 };
 
 /**
- * SECTION 7/8 — fitness for a single-task binary assignment (0=Edge,
- * 1=Cloud): normalize latency against the feasible Edge/Cloud range so
- * higher fitness always means lower latency.
+ * SECTION 6 — GBFS: sequential greedy allocation across the WHOLE task
+ * batch. Each task is compared against Edge/Cloud given the *running*
+ * load already assigned to each server so far — a genuinely different
+ * decision-making process from PSO's whole-vector search below.
+ * `candidates.A` / `candidates.B` are the two reference extremes (every
+ * task to Edge, or every task to Cloud) so the execution panel can show
+ * what the mixed greedy allocation actually improved on.
  */
-const fitnessOfPosition = (machine, position, refMin, refMax) => {
-  const profile = position === 0 ? SERVER_PROFILES.A : SERVER_PROFILES.B;
-  const candidate = evaluateCandidate(machine, profile);
-  const range = refMax - refMin || 1;
-  const normalizedLatency = Math.min(1, Math.max(0, (candidate.latency - refMin) / range));
-  return { fitness: +(1 - normalizedLatency).toFixed(4), candidate };
-};
+const computeGBFS = (tasks) => {
+  let edgeLoadMB = 0, cloudLoadMB = 0;
+  const sums = { latency: 0, time: 0, utilization: 0, energy: 0, throughput: 0 };
+  let edgeTaskCount = 0, cloudTaskCount = 0;
+  const allocation = [];
+  const allocationDetails = [];
 
-/**
- * SECTION 9 — real binary PSO (per the revision guide): particle
- * positions are the discrete choice itself (0=Edge, 1=Cloud), updated via
- * inertia + cognitive + social velocity terms and a sigmoid binary
- * transform, using a seeded RNG so results are reproducible. Because
- * this UI runs PSO against a single task, the search space collapses to
- * just 2 points — Edge or Cloud — so PSO here searches the same discrete
- * decision GBFS makes directly, and will often converge in 1–2
- * iterations. That's expected for a single-task run, not a bug; PSO's
- * advantage over GBFS shows up once it's searching a batch of tasks with
- * many valid Edge/Cloud combinations at once.
- */
-const computePSO = (machine, iterations = 4) => {
-  const random = new SeededRandom(RANDOM_SEED);
-  const w = 0.7, c1 = 1.5, c2 = 1.5, vMax = 0.5;
+  for (let i = 0; i < tasks.length; i++) {
+    const task = tasks[i];
+    const edgeResult = evaluateCandidate(task, SERVER_PROFILES.A, edgeLoadMB);
+    const cloudResult = evaluateCandidate(task, SERVER_PROFILES.B, cloudLoadMB);
 
-  const A = evaluateCandidate(machine, SERVER_PROFILES.A);
-  const B = evaluateCandidate(machine, SERVER_PROFILES.B);
-  const refMin = Math.min(A.latency, B.latency);
-  const refMax = Math.max(A.latency, B.latency);
+    let selectedServerKey, selected, selectionReason;
+    if (edgeResult.capacityExceeded && !cloudResult.capacityExceeded) {
+      selectedServerKey = "B"; selected = cloudResult;
+      selectionReason = "Edge capacity would be exceeded — Cloud is the only feasible candidate.";
+    } else if (!edgeResult.capacityExceeded && cloudResult.capacityExceeded) {
+      selectedServerKey = "A"; selected = edgeResult;
+      selectionReason = "Cloud capacity would be exceeded — Edge is the only feasible candidate.";
+    } else if (edgeResult.capacityExceeded && cloudResult.capacityExceeded) {
+      selectedServerKey = "B"; selected = cloudResult;
+      selectionReason = "Both servers are at capacity — dispatched to Cloud regardless as a fallback.";
+    } else {
+      selectedServerKey = edgeResult.latency <= cloudResult.latency ? "A" : "B";
+      selected = selectedServerKey === "A" ? edgeResult : cloudResult;
+      selectionReason = `Both feasible — ${resolveServer(selectedServerKey).label} has the lower computed latency (${selected.latency} ms vs ${(selectedServerKey === "A" ? cloudResult : edgeResult).latency} ms).`;
+    }
 
-  let particles = [0, 1].map(() => ({
-    position: random.nextInt(2),
-    velocity: random.nextFloat(-0.2, 0.2),
-  }));
-  particles.forEach((p) => {
-    const { fitness } = fitnessOfPosition(machine, p.position, refMin, refMax);
-    p.pBest = p.position;
-    p.pBestFitness = fitness;
-    p.fitness = fitness;
-  });
+    const edgeLoadBefore = edgeLoadMB, cloudLoadBefore = cloudLoadMB;
+    if (selectedServerKey === "A") { edgeLoadMB += task.taskSize; edgeTaskCount++; }
+    else { cloudLoadMB += task.taskSize; cloudTaskCount++; }
 
-  let globalBestPosition = particles[0].fitness >= particles[1].fitness ? particles[0].position : particles[1].position;
-  let globalBestFitness = Math.max(particles[0].fitness, particles[1].fitness);
+    sums.latency += selected.latency; sums.time += selected.time; sums.utilization += selected.utilization;
+    sums.energy += selected.energy; sums.throughput += selected.throughput;
+    allocation.push(selectedServerKey === "A" ? 0 : 1);
 
-  const log = [];
-  for (let it = 1; it <= iterations; it++) {
-    particles = particles.map((p) => {
-      const r1 = random.next(), r2 = random.next();
-      const cognitive = c1 * r1 * (p.pBest - p.position);
-      const social = c2 * r2 * (globalBestPosition - p.position);
-      let nv = w * p.velocity + cognitive + social;
-      nv = Math.min(vMax, Math.max(-vMax, nv));
-      const sigmoid = 1 / (1 + Math.exp(-nv));
-      const newPosition = random.next() < sigmoid ? 1 : 0;
-      const { fitness, candidate } = fitnessOfPosition(machine, newPosition, refMin, refMax);
-      const pBest = fitness > p.pBestFitness ? newPosition : p.pBest;
-      const pBestFitness = Math.max(fitness, p.pBestFitness);
-      return { position: newPosition, velocity: nv, pBest, pBestFitness, fitness, candidate };
-    });
-
-    particles.forEach((p) => {
-      if (p.fitness > globalBestFitness) { globalBestFitness = p.fitness; globalBestPosition = p.position; }
-    });
-
-    const withCandidate = particles.map((p) => p.candidate ? p : { ...p, candidate: fitnessOfPosition(machine, p.position, refMin, refMax).candidate });
-
-    log.push({
-      iteration: it,
-      particleA: { x: withCandidate[0].position, fitness: withCandidate[0].fitness, ...withCandidate[0].candidate },
-      particleB: { x: withCandidate[1].position, fitness: withCandidate[1].fitness, ...withCandidate[1].candidate },
-      bestFitness: +globalBestFitness.toFixed(4),
-      bestX: globalBestPosition,
+    allocationDetails.push({
+      taskIndex: i + 1, taskSize: task.taskSize,
+      edgeEval: edgeResult, cloudEval: cloudResult,
+      selectedServerKey, selectedServerLabel: resolveServer(selectedServerKey).label, selectionReason,
+      latencyMs: selected.latency, utilization: selected.utilization, energy: selected.energy,
+      edgeLoadBefore: +edgeLoadBefore.toFixed(1), edgeLoadAfter: +edgeLoadMB.toFixed(1),
+      cloudLoadBefore: +cloudLoadBefore.toFixed(1), cloudLoadAfter: +cloudLoadMB.toFixed(1),
     });
   }
 
-  const recommendedServer = globalBestPosition === 0 ? "A" : "B";
-  const official = evaluateCandidate(machine, SERVER_PROFILES[recommendedServer]);
+  const n = tasks.length;
+  const avg = (k) => +(sums[k] / n).toFixed(2);
+  const utilization = avg("utilization");
+  const totalLoad = edgeLoadMB + cloudLoadMB || 0.1;
+  const loadBalanceScore = +(100 * (1 - Math.abs(edgeLoadMB - cloudLoadMB) / totalLoad)).toFixed(1);
+
+  // Reference extremes for the execution-panel comparison table.
+  const A = evaluateAllocationBatch(tasks, Array.from({ length: n }, () => 0));
+  const B = evaluateAllocationBatch(tasks, Array.from({ length: n }, () => 1));
+  const recommendedServer = edgeTaskCount >= cloudTaskCount ? "A" : "B"; // majority — display only
 
   return {
-    iterations: log,
     candidates: { A, B },
+    allocation, allocationDetails,
     recommendedServer,
-    latency: official.latency,
-    time: official.time,
-    utilization: official.utilization,
-    energy: official.energy,
-    throughput: official.throughput,
-    decisionReason: `Binary PSO (seed ${RANDOM_SEED}) converged after ${iterations} iterations (fitness ${globalBestFitness.toFixed(4)}) on ${resolveServer(recommendedServer).label}.`,
+    latency: avg("latency"), time: avg("time"), utilization, energy: avg("energy"), throughput: avg("throughput"),
+    edgeTasks: edgeTaskCount, cloudTasks: cloudTaskCount,
+    edgeLoadMB: +edgeLoadMB.toFixed(1), cloudLoadMB: +cloudLoadMB.toFixed(1),
+    loadBalanceScore, taskCount: n,
+    decisionReason: `GBFS evaluated each of the ${n} tasks sequentially against the running Edge/Cloud load — ${edgeTaskCount} tasks (${(edgeTaskCount / n * 100).toFixed(1)}%) went to Edge Server A, ${cloudTaskCount} (${(cloudTaskCount / n * 100).toFixed(1)}%) to Cloud Server B. Average latency ${avg("latency")} ms across the batch, vs ${A.latency} ms if the whole batch went to Edge or ${B.latency} ms if it all went to Cloud.`,
+  };
+};
+
+/**
+ * SECTION 7/8 — fitness of one full allocation vector: minimize the
+ * batch's average latency, normalized against the feasible all-Edge /
+ * all-Cloud reference range.
+ */
+const calculateFitnessBatch = (tasks, allocation, refMin, refMax) => {
+  const result = evaluateAllocationBatch(tasks, allocation);
+  if (!result.feasible) return { fitness: -1, feasible: false, result };
+  const range = refMax - refMin || 1;
+  const normalizedLatency = Math.min(1, Math.max(0, (result.latency - refMin) / range));
+  return { fitness: +(1 - normalizedLatency).toFixed(4), feasible: true, result };
+};
+
+/**
+ * SECTION 9 — real binary PSO (per the revision guide) searching the
+ * WHOLE task batch at once: each particle's position is a full
+ * Edge(0)/Cloud(1) assignment vector, one bit per task, updated via
+ * inertia + cognitive + social velocity terms and a sigmoid binary
+ * transform, with a seeded RNG for reproducibility. With N tasks the
+ * search space is 2^N possible allocations — unlike the single-task
+ * case, GBFS's greedy per-task choice and PSO's whole-vector search can
+ * now genuinely land on different allocations with different average
+ * latencies.
+ */
+const computePSO = (tasks, iterations = 40, popSize = 2) => {
+  const random = new SeededRandom(RANDOM_SEED);
+  const n = tasks.length;
+  const w = 0.7, c1 = 1.5, c2 = 1.5, vMax = 0.5;
+
+  const edgeRef = evaluateAllocationBatch(tasks, Array.from({ length: n }, () => 0));
+  const cloudRef = evaluateAllocationBatch(tasks, Array.from({ length: n }, () => 1));
+  const refs = [edgeRef, cloudRef].filter((r) => r.feasible);
+
+  if (refs.length === 0) {
+    return {
+      feasible: false, candidates: { A: edgeRef, B: cloudRef }, recommendedServer: "B",
+      latency: 999999, time: 999999, utilization: 100, energy: 999.99, throughput: 0,
+      edgeTasks: 0, cloudTasks: n, loadBalanceScore: 0, iterations: [],
+      decisionReason: "PSO could not initialize: no feasible reference allocation exists for this batch.",
+    };
+  }
+  const latencies = refs.map((r) => r.latency);
+  const refMin = Math.min(...latencies), refMax = Math.max(...latencies);
+
+  let particles = Array.from({ length: popSize }, () => {
+    const position = Array.from({ length: n }, () => random.nextInt(2));
+    const velocity = Array.from({ length: n }, () => random.nextFloat(-0.2, 0.2));
+    const fr = calculateFitnessBatch(tasks, position, refMin, refMax);
+    return { position, velocity, pBest: [...position], pBestFitness: fr.fitness, fitness: fr.fitness, feasible: fr.feasible, result: fr.result };
+  });
+
+  let globalBest = null, globalBestFitness = -Infinity;
+  particles.forEach((p) => { if (p.feasible && p.fitness > globalBestFitness) { globalBestFitness = p.fitness; globalBest = { position: [...p.position], fitness: p.fitness, result: p.result }; } });
+  if (!globalBest) globalBest = { position: Array.from({ length: n }, () => 1), fitness: 0, result: cloudRef };
+
+  const cloudFraction = (arr) => arr.reduce((a, b) => a + b, 0) / arr.length;
+  const log = [];
+  let noImprovementCount = 0;
+  const CONVERGENCE_THRESHOLD = 15;
+  let iterationsCompleted = 0;
+
+  for (let it = 1; it <= iterations; it++) {
+    iterationsCompleted = it;
+    let improved = false;
+
+    particles = particles.map((particle) => {
+      const newVelocity = particle.position.map((pos, d) => {
+        const r1 = random.next(), r2 = random.next();
+        const cognitive = c1 * r1 * (particle.pBest[d] - pos);
+        const social = c2 * r2 * (globalBest.position[d] - pos);
+        return Math.min(vMax, Math.max(-vMax, particle.velocity[d] * w + cognitive + social));
+      });
+      const newPosition = newVelocity.map((v) => (random.next() < 1 / (1 + Math.exp(-v)) ? 1 : 0));
+      const fr = calculateFitnessBatch(tasks, newPosition, refMin, refMax);
+      let pBest = particle.pBest, pBestFitness = particle.pBestFitness;
+      if (fr.feasible && fr.fitness > pBestFitness) { pBest = newPosition; pBestFitness = fr.fitness; improved = true; }
+      return { position: newPosition, velocity: newVelocity, pBest, pBestFitness, fitness: fr.fitness, feasible: fr.feasible, result: fr.result };
+    });
+
+    particles.forEach((p) => { if (p.feasible && p.fitness > globalBestFitness) { globalBestFitness = p.fitness; globalBest = { position: [...p.position], fitness: p.fitness, result: p.result }; improved = true; } });
+
+    noImprovementCount = improved ? 0 : noImprovementCount + 1;
+    const converged = noImprovementCount >= CONVERGENCE_THRESHOLD;
+
+    if (it % 4 === 0 || it === 1 || it === iterations || converged) {
+      const p0 = particles[0], p1 = particles[popSize > 1 ? 1 : 0];
+      log.push({
+        iteration: it,
+        particleA: { x: +cloudFraction(p0.position).toFixed(3), fitness: +p0.fitness.toFixed(4), latency: p0.result.latency, time: p0.result.time, utilization: p0.result.utilization, energy: p0.result.energy, throughput: p0.result.throughput },
+        particleB: { x: +cloudFraction(p1.position).toFixed(3), fitness: +p1.fitness.toFixed(4), latency: p1.result.latency, time: p1.result.time, utilization: p1.result.utilization, energy: p1.result.energy, throughput: p1.result.throughput },
+        bestFitness: +globalBestFitness.toFixed(4),
+        bestX: +cloudFraction(globalBest.position).toFixed(3),
+      });
+    }
+    if (converged) break;
+  }
+
+  const official = globalBest.result;
+  const recommendedServer = official.edgeTasks >= official.cloudTasks ? "A" : "B"; // majority — display only
+
+  return {
+    feasible: true, allocation: globalBest.position, iterationsPerformed: iterationsCompleted,
+    candidates: { A: edgeRef, B: cloudRef },
+    recommendedServer,
+    latency: official.latency, time: official.time, utilization: official.utilization, energy: official.energy, throughput: official.throughput,
+    edgeTasks: official.edgeTasks, cloudTasks: official.cloudTasks, edgeLoadMB: official.edgeLoadMB, cloudLoadMB: official.cloudLoadMB,
+    loadBalanceScore: official.loadBalanceScore, iterations: log,
+    decisionReason: `Binary PSO (seed ${RANDOM_SEED}, ${popSize} particles) searched ${iterationsCompleted} iterations over the ${n}-task batch and settled on ${official.edgeTasks} tasks to Edge, ${official.cloudTasks} to Cloud — average latency ${official.latency} ms (fitness ${globalBestFitness.toFixed(4)}).`,
   };
 };
 
@@ -503,7 +630,7 @@ function useOffloadProgress(offloading, success) {
 ─────────────────────────────────────────────── */
 const delay = (ms) => new Promise((res) => setTimeout(res, ms));
 
-function useSimulationRunner({ machine, workload, setHistory }) {
+function useSimulationRunner({ machine, tasks, workload, setHistory }) {
   const [gbfsData, setGbfsData] = useState(null);
   const [psoData, setPsoData] = useState(null);
   const [algoRunning, setAlgoRunning] = useState(false);
@@ -546,10 +673,11 @@ function useSimulationRunner({ machine, workload, setHistory }) {
     const g = gbfsOverride ?? gbfsData;
     const p = psoOverride ?? psoData;
     if (!g || !p) return false;
-    const gbfsWins = g.latency <= p.latency;
-    const winnerAlgo = gbfsWins ? "GBFS" : "PSO";
-    const decidedKey = (gbfsWins ? g : p).recommendedServer;
+    const gbfsBetter = g.latency <= p.latency;
+    const betterApproach = gbfsBetter ? "GBFS" : "PSO";
+    const decidedKey = (gbfsBetter ? g : p).recommendedServer;
     const targetSrv = resolveServer(decidedKey);
+    const totalTaskSize = tasks.reduce((a, t) => a + t.taskSize, 0);
 
     setOffloading(true);
     setOffloadError(null);
@@ -560,8 +688,8 @@ function useSimulationRunner({ machine, workload, setHistory }) {
           method: "POST",
           body: JSON.stringify({
             machineId: machine.machineId,
-            taskSize: machine.taskSize,
-            algorithm: winnerAlgo,
+            taskSize: +totalTaskSize.toFixed(2),
+            algorithm: betterApproach,
             targetServer: targetSrv.label,
             gbfsLatency: g.latency,
             psoLatency: p.latency,
@@ -576,9 +704,9 @@ function useSimulationRunner({ machine, workload, setHistory }) {
           timestamp: new Date().toLocaleString("en-US", { month: "short", day: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }),
           machineName: machine.name,
           machineId: machine.machineId,
-          workloadName: machine.taskType || machine.category || "Standard Load",
+          workloadName: `${tasks.length}-task batch (${machine.taskType || machine.category || "Standard Load"})`,
           level: workload ? WORKLOAD_LABELS[workload] : "Live",
-          algorithm: winnerAlgo,
+          algorithm: betterApproach,
           server: targetSrv.label,
           latency: result.measuredLatency,
           status: result.status === "success" ? "Success" : "Failed",
@@ -604,8 +732,8 @@ function useSimulationRunner({ machine, workload, setHistory }) {
     setGbfsStage(0);
     setPsoIteration(0);
     try {
-      const gbfsResult = computeGBFS(machine);
-      const psoResult = computePSO(machine);
+      const gbfsResult = computeGBFS(tasks);
+      const psoResult = computePSO(tasks);
       setGbfsSim(gbfsResult);
       setPsoSim(psoResult);
 
@@ -1399,7 +1527,36 @@ const Step0Machine = ({ machineData, loading, error, selectedId, setSelectedId, 
 /* ───────────────────────────────────────────────
    STEP 1: COLLECT DATA
 ─────────────────────────────────────────────── */
-const Step1CollectData = ({ machine: m, workload, setWorkload }) => {
+const TaskBatchPreviewTable = ({ tasks }) => {
+  const T = useT();
+  if (!tasks?.length) return null;
+  const totalSize = tasks.reduce((a, t) => a + t.taskSize, 0);
+  const avgSize = totalSize / tasks.length;
+  return (
+    <Card title="Generated Task Batch" sub="What GBFS + PSO will actually run against — scaled from the reference size above via a fixed multiplier spread" accent={T.purple}>
+      <div style={{ display: "flex", gap: 12, marginBottom: 14, flexWrap: "wrap" }}>
+        <Stat label="Task Count" value={tasks.length} color="purple" />
+        <Stat label="Total Batch Size" value={`${totalSize.toFixed(1)} MB`} color="blue" />
+        <Stat label="Avg Task Size" value={`${avgSize.toFixed(2)} MB`} color="green" />
+      </div>
+      <table style={{ width: "100%", borderCollapse: "collapse" }}>
+        <thead><tr><Th>#</Th><Th>Task Size</Th><Th>Queue Length</Th><Th>Throughput Ref.</Th></tr></thead>
+        <tbody>
+          {tasks.map((t, i) => (
+            <TableRow key={t.taskIndex} isOdd={i % 2 === 1} cells={[
+              <span style={{ fontFamily: T.fontSans, color: T.text }}>Task {t.taskIndex}</span>,
+              <span>{t.taskSize} MB</span>,
+              <span>{t.queueLength}</span>,
+              <span>{t.throughput} tasks/min</span>,
+            ]} />
+          ))}
+        </tbody>
+      </table>
+    </Card>
+  );
+};
+
+const Step1CollectData = ({ machine: m, workload, setWorkload, tasks }) => {
   const T = useT();
   return (
     <div>
@@ -1415,20 +1572,20 @@ const Step1CollectData = ({ machine: m, workload, setWorkload }) => {
               Live data fetched for <strong style={{ color: T.text }}>{m.name} ({m.machineId})</strong>.
             </>
           )}{" "}
-          These metrics are fed into the algorithms to determine the optimal offload target.
+          This reference size is scaled into a batch of {tasks?.length || 0} tasks below — GBFS and PSO both run against that same batch.
         </p>
       </div>
 
       <WorkloadSelector machineId={m.machineId} workload={workload} setWorkload={setWorkload} />
 
       <div style={{ display: "flex", gap: 12, marginBottom: 16, flexWrap: "wrap" }}>
-        <Stat label="Task Size" value={`${m.taskSize} MB`} color="blue" />
+        <Stat label="Reference Task Size" value={`${m.taskSize} MB`} color="blue" />
         <Stat label="Processing Time" value={`${m.processingTime} ms`} color="green" />
         <Stat label="Bandwidth" value={`${m.bandwidth} Mbps`} color="purple" />
         <Stat label="Energy Utilization" value={`${m.energyConsumption} kWh`} color="amber" />
       </div>
 
-      <Card title="Parameter Table" sub={`${m.machineId} · ${workload ? `${WORKLOAD_LABELS[workload]} workload` : "Supabase"}`} accent={T.blue}>
+      <Card title="Parameter Table" sub={`${m.machineId} · ${workload ? `${WORKLOAD_LABELS[workload]} workload` : "Supabase"} — Current System baseline, for comparison only` } accent={T.blue}>
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <thead>
             <tr>
@@ -1465,10 +1622,12 @@ const Step1CollectData = ({ machine: m, workload, setWorkload }) => {
         </table>
       </Card>
 
+      <TaskBatchPreviewTable tasks={tasks} />
+
       <SelectedWorkloadCard machine={m} workload={workload} />
 
       <InfoBox color="green">
-        All parameters loaded. The algorithms will evaluate Edge Server A and Cloud Server B to determine where this task should be offloaded.
+        Batch ready — GBFS will allocate each task sequentially against the running Edge/Cloud load, and PSO will search whole-batch Edge/Cloud assignments at once.
       </InfoBox>
     </div>
   );
@@ -1713,7 +1872,7 @@ const buildPsoGraphData = (m, sim, iteration) => {
 const serverLabel = (key) => (key ? resolveServer(key).label : "—");
 
 const Step2Algorithms = ({
-  machine: m, gbfsData, psoData, algoRunning, algoError,
+  machine: m, tasks, gbfsData, psoData, algoRunning, algoError,
   onRunBoth, gbfsSim, psoSim, gbfsStage, psoIteration,
   offloading, offloadResult, offloadError, onRetryOffload, workload,
 }) => {
@@ -1728,18 +1887,23 @@ const Step2Algorithms = ({
     }
   }, [bothDone]);
 
+  if (!tasks || tasks.length === 0) {
+    return <Card><InfoBox color="amber">Generate a task batch first (Step 2).</InfoBox></Card>;
+  }
+
   const gbfsWins = bothDone && gbfsData.latency <= psoData.latency;
   const winnerData = bothDone ? (gbfsWins ? gbfsData : psoData) : null;
   const winnerAlgo = bothDone ? (gbfsWins ? "GBFS" : "PSO") : null;
   const decidedServer = winnerData?.recommendedServer ?? (gbfsWins ? gbfsData?.recommendedServer : psoData?.recommendedServer);
+  const totalTaskSize = tasks.reduce((a, t) => a + t.taskSize, 0);
 
   return (
     <div>
       <div style={{ marginBottom: 20 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, color: T.text, margin: 0, fontFamily: T.fontSans }}>Algorithm Execution</h1>
         <p style={{ fontSize: 16, color: T.muted, margin: "6px 0 0", fontFamily: T.fontSans }}>
-          <strong style={{ color: T.text }}>GBFS</strong> and <strong style={{ color: T.text }}>PSO</strong> each evaluate both candidate targets (Edge Server A, Cloud Server B) and independently decide where to offload the task.
-          The algorithm with the lower latency wins, and its server decision is used.
+          <strong style={{ color: T.text }}>GBFS</strong> and <strong style={{ color: T.text }}>PSO</strong> each receive the same {tasks.length}-task batch and independently allocate every task to Edge Server A or Cloud Server B — GBFS greedily, task by task; PSO by searching whole allocation vectors at once.
+          Whichever achieves the lower average latency across the batch is dispatched.
         </p>
       </div>
 
@@ -1891,7 +2055,7 @@ const Step2Algorithms = ({
 
           <ProcessingNodeComparison gbfsData={gbfsData} decidedKey={decidedServer} winnerAlgo={winnerAlgo} />
           <div className="app-grid-21" style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr)", gap: 12 }}>
-            <TaskPayloadCard m={m} workload={workload} decidedSrv={resolveServer(decidedServer)} progress={offloadProgress} success={offloadResult?.status === "success"} />
+            <TaskPayloadCard m={m} workload={workload} decidedSrv={resolveServer(decidedServer)} progress={offloadProgress} success={offloadResult?.status === "success"} batchSize={totalTaskSize} taskCount={tasks.length} />
             <ExecutionTimeline progress={offloadProgress} offloading={offloading} success={offloadResult?.status === "success"} />
           </div>
 
@@ -1967,17 +2131,18 @@ const OffloadProgressBar = ({ progress, offloading, success, color }) => {
 /* ───────────────────────────────────────────────
    STEP 4: TASK PAYLOAD CARD
 ─────────────────────────────────────────────── */
-const TaskPayloadCard = ({ m, workload, decidedSrv, progress, success }) => {
+const TaskPayloadCard = ({ m, workload, decidedSrv, progress, success, batchSize, taskCount }) => {
   const T = useT();
   const status = success ? "COMPLETE" : progress === 0 ? "PENDING" : progress < 100 ? "TRANSFERRING" : "FINALIZING";
   return (
-    <Card title="Task Payload" sub="Workload data being transferred to the target server" accent={T.amber}>
+    <Card title="Task Payload" sub="Batch being transferred to the target server" accent={T.amber}>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10, marginBottom: 12 }}>
         {[
           ["Workload", workload ? WORKLOAD_LABELS[workload] : "Live Data"],
           ["Source", m.name],
           ["Target", decidedSrv.label],
-          ["Size", `${m.taskSize} MB`],
+          ["Tasks", taskCount ?? 1],
+          ["Total Size", `${(batchSize ?? m.taskSize).toFixed ? (batchSize ?? m.taskSize).toFixed(1) : (batchSize ?? m.taskSize)} MB`],
         ].map(([l, v]) => (
           <div key={l} style={{ background: T.elevated, border: `1px solid ${T.border}`, borderRadius: 6, padding: "8px 10px" }}>
             <div style={{ fontSize: 11, color: T.muted, textTransform: "uppercase", letterSpacing: "0.06em", fontFamily: T.fontSans, marginBottom: 3 }}>{l}</div>
@@ -3062,19 +3227,26 @@ function App() {
   const { machineData, loading: machinesLoading, error: machinesError, selectedId, setSelectedId, serverStatuses, loadMachines } = useMachines();
 
   const rawMachine = selectedId ? machineData[selectedId] : null;
+  // `machine` (tier-merged) stays the "Current System" baseline used by
+  // every comparison chart — unchanged from before. `tasks` is the
+  // separately-generated batch that GBFS/PSO actually run against.
   const machine = applyWorkloadTier(rawMachine, workload);
+  const taskBase = workload
+    ? WORKLOAD_TIERS[rawMachine?.machineId]?.[workload]
+    : (rawMachine ? { taskSize: rawMachine.taskSize, queueLength: rawMachine.queueLength, throughput: rawMachine.throughput } : null);
+  const tasks = generateTaskBatch(taskBase);
 
   const {
     gbfsData, psoData, algoRunning, algoError,
     gbfsSim, psoSim, gbfsStage, psoIteration,
     offloadResult, offloading, offloadError,
     runBothAlgorithms, retryOffload, resetRun,
-  } = useSimulationRunner({ machine, workload, setHistory });
+  } = useSimulationRunner({ machine, tasks, workload, setHistory });
 
   const decidedServerKey = (() => {
     if (!gbfsData || !psoData) return null;
-    const gbfsWins = gbfsData.latency <= psoData.latency;
-    return (gbfsWins ? gbfsData : psoData).recommendedServer ?? null;
+    const gbfsBetter = gbfsData.latency <= psoData.latency;
+    return (gbfsBetter ? gbfsData : psoData).recommendedServer ?? null;
   })();
 
   const handleSelectMachine = (id) => {
@@ -3105,7 +3277,7 @@ function App() {
 
   const canNext = () => {
     if (step === 0) return !!selectedId;
-    if (step === 1) return machine && WORKLOAD_TIERS[machine.machineId] ? !!workload : true;
+    if (step === 1) return machine && WORKLOAD_TIERS[machine.machineId] ? !!workload : tasks.length > 0;
     if (step === 2) return !!offloadResult;
     return true;
   };
@@ -3132,11 +3304,12 @@ function App() {
           />
         );
       case 1:
-        return machine ? <Step1CollectData machine={machine} workload={workload} setWorkload={handleSetWorkload} /> : null;
+        return machine ? <Step1CollectData machine={machine} workload={workload} setWorkload={handleSetWorkload} tasks={tasks} /> : null;
       case 2:
-        return machine ? (
+        return machine && tasks.length > 0 ? (
           <Step2Algorithms
             machine={machine}
+            tasks={tasks}
             gbfsData={gbfsData}
             psoData={psoData}
             algoRunning={algoRunning}
