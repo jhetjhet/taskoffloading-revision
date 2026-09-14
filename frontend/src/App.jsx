@@ -84,7 +84,7 @@ const SERVERS = {
     sub: "Energy-Efficient · Cloud-Hosted",
     icon: "☁️",
     tag: "B",
-    baseUrl: "https://system-1-rcpl.onrender.com/api",
+    baseUrl: "https://system-1-rcpl.onrender.com/ap",
   },
 };
 
