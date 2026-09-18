@@ -1,14 +1,8 @@
 import React from "react";
 import { useT } from "../../context/ThemeContext";
-import { STEPS, WORKLOAD_LABELS, resolveServer } from "../../config/constants";
 
-export const TopBar = ({ step, maxReached, onJump, algoDecision, dark, setDark, workload }) => {
+export const TopBar = ({ step, dark, setDark }) => {
   const T = useT();
-
-  const srv = algoDecision ? resolveServer(algoDecision) : null;
-  const srvAccent = algoDecision === "A" ? T.blue : T.green;
-  const srvAccentBg = algoDecision === "A" ? T.blueBg : T.greenBg;
-  const srvAccentDim = algoDecision === "A" ? T.blueDim : T.greenDim;
 
   return (
     <div
@@ -29,46 +23,9 @@ export const TopBar = ({ step, maxReached, onJump, algoDecision, dark, setDark, 
         zIndex: 5,
       }}
     >
-      <span style={{ fontSize: 15, color: T.muted, fontFamily: T.fontSans }}>Simulation</span>
-      <span style={{ color: T.border, fontSize: 15 }}>›</span>
-      <span style={{ fontSize: 15, color: T.text, fontWeight: 600, fontFamily: T.fontSans }}>
-        {STEPS[step].title}
-      </span>
-
-      <div style={{ display: "flex", alignItems: "center", gap: 4, marginLeft: 16, overflow: "hidden" }}>
-        {STEPS.map((s, i) => {
-          const active = i === step;
-          const done = i < step;
-          const clickable = i <= maxReached;
-          return (
-            <React.Fragment key={i}>
-              <button
-                onClick={() => clickable && onJump(i)}
-                className={clickable ? "app-btn" : ""}
-                style={{
-                  padding: "3px 10px",
-                  borderRadius: 4,
-                  fontSize: 14,
-                  fontWeight: active ? 700 : 400,
-                  fontFamily: T.fontMono,
-                  background: active ? T.greenBg : done ? T.elevated : "transparent",
-                  color: active ? T.green : done ? T.muted : T.dim,
-                  border: `1px solid ${active ? T.greenDim : done ? T.border : "transparent"}`,
-                  cursor: clickable ? "pointer" : "default",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                {done ? "✓ " : ""}
-                {s.short}
-              </button>
-              {i < STEPS.length - 1 && <span style={{ color: T.border, fontSize: 13 }}>—</span>}
-            </React.Fragment>
-          );
-        })}
-      </div>
 
       <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10 }}>
-        {workload && (
+        {/* {workload && (
           <div
             style={{
               display: "flex",
@@ -86,8 +43,8 @@ export const TopBar = ({ step, maxReached, onJump, algoDecision, dark, setDark, 
             <span style={{ fontSize: 12, opacity: 0.7 }}>workload →</span>
             {WORKLOAD_LABELS[workload]}
           </div>
-        )}
-        {srv && (
+        )} */}
+        {/* {srv && (
           <div
             style={{
               display: "flex",
@@ -105,7 +62,7 @@ export const TopBar = ({ step, maxReached, onJump, algoDecision, dark, setDark, 
             <span style={{ fontSize: 12, opacity: 0.7 }}>algo →</span>
             {srv.icon} {srv.label}
           </div>
-        )}
+        )} */}
         <div
           style={{
             fontSize: 14,
@@ -117,7 +74,7 @@ export const TopBar = ({ step, maxReached, onJump, algoDecision, dark, setDark, 
             padding: "3px 10px",
           }}
         >
-          {step + 1} / {STEPS.length}
+          {step + 1} / 5
         </div>
         <button
           className="app-btn"

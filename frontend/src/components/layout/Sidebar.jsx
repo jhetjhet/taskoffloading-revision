@@ -1,6 +1,5 @@
 import React from "react";
 import { useT } from "../../context/ThemeContext";
-import { STEPS, SERVERS } from "../../config/constants";
 
 export const Sidebar = ({ step, maxReached, onJump, serverStatuses }) => {
   const T = useT();
@@ -51,9 +50,6 @@ export const Sidebar = ({ step, maxReached, onJump, serverStatuses }) => {
               <br />
               Simulation System
             </div>
-            <div style={{ fontSize: 13, color: T.muted, fontFamily: T.fontMono, marginTop: 2 }}>
-              IoT · v5.0
-            </div>
           </div>
         </div>
       </div>
@@ -73,7 +69,7 @@ export const Sidebar = ({ step, maxReached, onJump, serverStatuses }) => {
         >
           Pipeline
         </div>
-        {STEPS.map((s, i) => {
+        {Array.from({ length: 5 }).map((_, i) => {
           const active = i === step;
           const done = i < step;
           const clickable = i <= maxReached;
@@ -141,7 +137,7 @@ export const Sidebar = ({ step, maxReached, onJump, serverStatuses }) => {
                     textOverflow: "ellipsis",
                   }}
                 >
-                  {s.title}
+                  SSSSS
                 </div>
               </div>
               {active && (
@@ -174,7 +170,7 @@ export const Sidebar = ({ step, maxReached, onJump, serverStatuses }) => {
         >
           Servers
         </div>
-        {Object.entries(SERVERS).map(([key, srv]) => {
+        {/* {Object.entries(SERVERS).map(([key, srv]) => {
           const st = serverStatuses[key];
           const online = st === "online";
           return (
@@ -217,7 +213,7 @@ export const Sidebar = ({ step, maxReached, onJump, serverStatuses }) => {
               </div>
             </div>
           );
-        })}
+        })} */}
       </div>
     </div>
   );
