@@ -15,6 +15,8 @@ CORS(app)
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 
+local_logs = []
+
 def sb_headers():
     return {
         "apikey":        SUPABASE_KEY,
@@ -28,7 +30,8 @@ def sb_post(table, data):
     r = requests.post(
         f"{SUPABASE_URL}/rest/v1/{table}",
         headers=sb_headers(),
-        json=data
+        json=data,
+        timeout=5
     )
     r.raise_for_status()
     return r.json()
@@ -38,7 +41,8 @@ def sb_get(table, params=None):
     r = requests.get(
         f"{SUPABASE_URL}/rest/v1/{table}",
         headers=sb_headers(),
-        params=params or {}
+        params=params or {},
+        timeout=5
     )
     r.raise_for_status()
     return r.json()
@@ -66,10 +70,13 @@ def index():
 # ══════════════════════════════════════════════════
 @app.route("/health")
 def health():
+    if not SUPABASE_URL:
+        return jsonify({"status": "ok", "db": "in-memory simulation", "server": "B"})
     try:
         r = requests.get(
             f"{SUPABASE_URL}/rest/v1/offload_logs?limit=1",
-            headers=sb_headers()
+            headers=sb_headers(),
+            timeout=5
         )
         if r.status_code in [200, 206]:
             return jsonify({"status": "ok", "db": "connected via Supabase REST", "server": "B"})
@@ -138,29 +145,34 @@ def run_pso():
 @app.route("/api/offload", methods=["POST"])
 def offload_task():
     try:
-        data             = request.json
-        measured_latency = round(min(data["gbfsLatency"], data["psoLatency"]) * 0.97, 2)
-
-        # Log to Supabase — tagged as Server B
-        sb_post("offload_logs", {
-            "machine_id":       data["machineId"],
-            "algorithm":        data["algorithm"],
-            "target_server":    data["targetServer"],
-            "gbfs_latency":     data["gbfsLatency"],
-            "pso_latency":      data["psoLatency"],
+        data             = request.json or {}
+        measured_latency = round(min(data.get("gbfsLatency", 0), data.get("psoLatency", 0)) * 0.97, 2)
+        log_entry = {
+            "machine_id":       data.get("machineId"),
+            "algorithm":        data.get("algorithm"),
+            "target_server":    data.get("targetServer"),
+            "gbfs_latency":     data.get("gbfsLatency"),
+            "pso_latency":      data.get("psoLatency"),
             "measured_latency": measured_latency,
             "status":           "success",
             "server":           "B"
-        })
+        }
+
+        if SUPABASE_URL:
+            try:
+                sb_post("offload_logs", log_entry)
+            except Exception:
+                local_logs.insert(0, log_entry)
+        else:
+            local_logs.insert(0, log_entry)
 
         return jsonify({
             "status":          "success",
             "measuredLatency": measured_latency,
             "server":          "B",
-            "algorithm":       data["algorithm"]
+            "algorithm":       data.get("algorithm")
         })
     except Exception as e:
-        # Return the exact Supabase error so you can debug it
         return jsonify({"error": str(e), "server": "B"}), 500
 
 # ══════════════════════════════════════════════════
@@ -169,15 +181,17 @@ def offload_task():
 @app.route("/api/logs")
 def get_logs():
     try:
-        rows = sb_get("offload_logs", {
-            "select": "*",
-            "server": "eq.B",
-            "order":  "created_at.desc",
-            "limit":  "50"
-        })
-        return jsonify(rows)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        if SUPABASE_URL:
+            rows = sb_get("offload_logs", {
+                "select": "*",
+                "server": "eq.B",
+                "order":  "created_at.desc",
+                "limit":  "50"
+            })
+            return jsonify(rows)
+        return jsonify(local_logs[:50])
+    except Exception:
+        return jsonify(local_logs[:50])
 
 # ══════════════════════════════════════════════════
 # RUN
@@ -193,4 +207,6 @@ def debug():
     })
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    port = int(os.environ.get("PORT", 5001))
+    host = os.environ.get("HOST", "0.0.0.0")
+    app.run(host=host, port=port, debug=os.environ.get("FLASK_DEBUG", "false").lower() in ("true", "1"))

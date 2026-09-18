@@ -1,0 +1,220 @@
+# =============================================================================
+# Task Offloading — Multi-App .gitignore
+# Apps: root Python, Backend (Python + Node), frontend (React/Vite),
+#        simulation_backend (Python), iot_task_offloading (Python)
+# =============================================================================
+
+
+# -----------------------------------------------------------------------------
+# Environment & Secrets
+# -----------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.cert
+
+
+# -----------------------------------------------------------------------------
+# Python
+# -----------------------------------------------------------------------------
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+parts/
+var/
+sdist/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.dist-info/
+MANIFEST
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+.python-version
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+*.py,cover
+htmlcov/
+.tox/
+.nox/
+nosetests.xml
+test-results/
+junit*.xml
+
+# Pytest
+.pytest_cache/
+pytestdebug.log
+
+# Ruff
+.ruff_cache/
+
+# MyPy / Pyright / type checkers
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pytype/
+.pyre/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# pyenv / PDM / Poetry / Pipenv
+.pdm.toml
+.pdm-python
+.pdm-build/
+poetry.lock
+Pipfile.lock
+
+# Profiling
+*.prof
+
+
+# -----------------------------------------------------------------------------
+# Node.js / React / Vite  (frontend/, Backend/server.js)
+# -----------------------------------------------------------------------------
+
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Build output
+frontend/dist/
+frontend/.vite/
+
+# Vite / Rollup caches
+*.local
+vite.config.js.timestamp-*
+
+# ESLint cache
+.eslintcache
+
+# TypeScript build info
+*.tsbuildinfo
+
+# Package manager locks (keep the one you use; remove the rest)
+# package-lock.json  ← keep if using npm
+# yarn.lock          ← keep if using yarn
+# pnpm-lock.yaml     ← keep if using pnpm
+
+
+# -----------------------------------------------------------------------------
+# Docker
+# -----------------------------------------------------------------------------
+
+# Docker volumes / runtime state baked into the repo accidentally
+docker-data/
+postgres-data/
+redis-data/
+volumes/
+
+
+# -----------------------------------------------------------------------------
+# Logs & runtime artifacts
+# -----------------------------------------------------------------------------
+
+logs/
+*.log
+*.log.*
+*.out
+
+# PIDs / sockets
+*.pid
+*.seed
+*.pid.lock
+*.sock
+
+
+# -----------------------------------------------------------------------------
+# Databases & data exports
+# -----------------------------------------------------------------------------
+
+*.sqlite
+*.sqlite3
+*.db
+*.dump
+*.sql.gz
+
+# Simulation data exports (keep tracked CSVs; ignore generated output)
+simulation_backend/data/output/
+simulation_backend/data/results/
+
+
+# -----------------------------------------------------------------------------
+# OS / Editor
+# -----------------------------------------------------------------------------
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Linux
+*~
+
+# VS Code
+.vscode/
+!.vscode/extensions.json
+
+# JetBrains (PyCharm, WebStorm, etc.)
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# Vim / Emacs
+*.swp
+*.swo
+*~
+\#*\#
+.\#*
+
+
+# -----------------------------------------------------------------------------
+# Misc
+# -----------------------------------------------------------------------------
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.orig
+*.rej
+
+# Compiled C extensions (native Python modules)
+*.so
+*.pyd
+
+plan.md

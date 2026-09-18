@@ -1,6 +1,0 @@
-matplotlib
-flask
-flask-cors
-psycopg2-binary
-gunicorn
-requests

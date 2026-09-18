@@ -1,5 +1,83 @@
 # Industrial IoT Edge-Cloud Task Offloading Simulation System
 
+## Current Backend Setup
+
+The active backend is [simulation_backend](simulation_backend), not the legacy `Backend/` folder. It uses local PostgreSQL for machine/task templates and run history, Redis for internal worker commands/events, Socket.IO for frontend events, and four isolated workers: GBFS Edge, GBFS Cloud, PSO Edge, and PSO Cloud.
+
+### Start and Seed
+
+```bash
+cp .env.example .env
+
+docker compose up -d postgres redis
+docker compose --profile setup run --rm --build seed
+docker compose up -d --build simulation-api gbfs-edge gbfs-cloud pso-edge pso-cloud
+```
+
+The seed command is repeatable. It upserts 5 machines and 15 task templates from [simulation_backend/data](simulation_backend/data). Start the frontend after the API is healthy:
+
+```bash
+docker compose up -d --build frontend
+```
+
+The API is available at `http://localhost:8000`.
+
+### Frontend API Contract
+
+- `GET /api/v1/health` checks API, PostgreSQL, and Redis health.
+- `GET /api/v1/machines` returns the seeded machine catalog.
+- `GET /api/v1/task-templates` returns all 15 task templates.
+- `GET /api/v1/servers` returns the available server list with latency/capability metadata.
+- `GET /api/v1/servers/ping/{server_id}` pings a server and returns its measured latency profile.
+- `GET /api/v1/workloads/{machine_id}` returns the task templates for one machine so the frontend can batch them into a custom low/mid/high simulation.
+- `POST /api/v1/runs` accepts a custom `tasks` array or a machine-based batch and returns a `202` response containing `run_id`.
+- `GET /api/v1/runs/{run_id}` returns persisted input, GBFS/PSO allocations, and per-task timings/statuses.
+- `GET /api/v1/runs` returns recent run history.
+
+Socket.IO clients connect to the API origin and emit `join_run` with `{ "run_id": "..." }`. The backend emits `run`, `algorithm`, `task`, `server_usage`, `run_complete`, and `run_failed`.
+
+Task lifecycle events are emitted for each task on its assigned algorithm/server pair and follow this status flow:
+
+```json
+{
+   "event": "task",
+   "run_id": "<uuid>",
+   "algorithm": "GBFS",
+   "server": "GBFS:SERVER_A",
+   "task_id": "TSK-1042",
+   "status": "TRANSFERRING"
+}
+```
+
+Later task events resolve to `FINISHED` or `FAILED`, and include the same `run_id`, `algorithm`, `server`, and `task_id`, plus `error_message` when the task misses its SLA or cannot fit the server profile.
+
+Server usage snapshots are emitted as a summary of the currently active load on each of the four simulated workers. The frontend can use them to update utilization bars and status chips in real time:
+
+```json
+{
+   "event": "server_usage",
+   "run_id": "<uuid>",
+   "server_id": "GBFS:SERVER_A",
+   "algorithm": "GBFS",
+   "placement": "EDGE",
+   "status": "BUSY",
+   "tasks_in_flight": 6,
+   "queue_depth": 2,
+   "running_tasks": 3,
+   "finished_tasks": 4,
+   "failed_tasks": 1,
+   "cpu_utilization_percent": 42.86,
+   "memory_utilization_percent": 66.67
+}
+```
+
+The live server IDs are exactly:
+
+- `GBFS:SERVER_A`
+- `GBFS:SERVER_B`
+- `PSO:SERVER_A`
+- `PSO:SERVER_B`
+
 An experimental research and simulation platform designed to evaluate and optimize task offloading decisions in Industrial Internet of Things (IIoT) smart manufacturing environments. The system evaluates task distribution between localized **Edge Servers** and centralized **Cloud Servers** using two core algorithms: **Greedy Best-First Search (GBFS)** and **Particle Swarm Optimization (PSO)**.
 
 ---
@@ -205,7 +283,30 @@ export DB_PORT="5432"
 
 ---
 
-### Option A: Running the React Web Application
+### Option A: Running with Docker Compose (Recommended)
+
+Run both the Backend (Edge Server A + Cloud Server B) and Frontend (React + Nginx) with a single command:
+
+```bash
+# Optional: create .env if configuring Supabase credentials
+cp .env.example .env
+
+# Build and start containers
+docker compose up --build
+```
+
+- **Frontend Dashboard**: `http://localhost:5173`
+- **Edge Server A API**: `http://localhost:5000`
+- **Cloud Server B API**: `http://localhost:5001`
+
+To stop the services:
+```bash
+docker compose down
+```
+
+---
+
+### Option B: Running the React Web Application (Manual Local Setup)
 
 1. **Start the Frontend**:
    ```bash
@@ -238,7 +339,7 @@ export DB_PORT="5432"
 
 ---
 
-### Option B: Running the Standalone Tkinter Desktop Simulator
+### Option C: Running the Standalone Tkinter Desktop Simulator
 
 The desktop simulation runs locally without requiring a browser:
 
