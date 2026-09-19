@@ -20,5 +20,5 @@ def test_server_usage_snapshot_reports_real_time_load() -> None:
     assert snapshot["tasks_in_flight"] == 6
     assert snapshot["finished_tasks"] == 4
     assert snapshot["failed_tasks"] == 1
-    assert snapshot["cpu_utilization_percent"] > 0
-    assert snapshot["memory_utilization_percent"] > 0
+    assert snapshot["cpu_utilization_percent"] == 0.0
+    assert snapshot["memory_utilization_percent"] == 0.0

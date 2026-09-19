@@ -25,7 +25,7 @@ The API is available at `http://localhost:8000`.
 ### Frontend API Contract
 
 - `GET /api/v1/health` checks API, PostgreSQL, and Redis health.
-- `GET /api/v1/machines` returns the seeded machine catalog.
+- `GET /api/v1/machines` returns the seeded machine catalog with `id`, `name`, and nullable `image` URL fields.
 - `GET /api/v1/task-templates` returns all 15 task templates.
 - `GET /api/v1/servers` returns the available server list with latency/capability metadata.
 - `GET /api/v1/servers/ping/{server_id}` pings a server and returns its measured latency profile.
@@ -51,7 +51,7 @@ Task lifecycle events are emitted for each task on its assigned algorithm/server
 
 Later task events resolve to `FINISHED` or `FAILED`, and include the same `run_id`, `algorithm`, `server`, and `task_id`, plus `error_message` when the task misses its SLA or cannot fit the server profile.
 
-Server usage snapshots are emitted as a summary of the currently active load on each of the four simulated workers. The frontend can use them to update utilization bars and status chips in real time:
+Server usage snapshots are emitted as a summary of the currently active load on each of the four simulated workers after every task lifecycle transition. The frontend can use them to update utilization bars and status chips in real time:
 
 ```json
 {
@@ -67,9 +67,15 @@ Server usage snapshots are emitted as a summary of the currently active load on 
    "finished_tasks": 4,
    "failed_tasks": 1,
    "cpu_utilization_percent": 42.86,
-   "memory_utilization_percent": 66.67
+   "memory_utilization_percent": 66.67,
+   "storage_utilization_percent": 31.25,
+   "simulated_time_sec": 1.234
 }
 ```
+
+Task statuses are emitted in simulator order as `TRANSFERRING`, `IN_QUEUE`, `RUNNING`, and then `FINISHED` or `FAILED`. Server usage values are calculated from active transfers, queue depth, running CPU demand, reserved RAM, and queue storage; they are not frontend estimates.
+
+The API uses `SIMULATION_FORECAST_TICK_SEC` (default `0.1`) for GBFS/PSO planning so PSO forecasting does not leave the UI in `PENDING` for the whole optimization search. Workers use `SIMULATION_EXECUTION_TICK_SEC` (default `0.01`) for detailed transfer, queue, and execution simulation. `SIMULATION_TIME_SCALE` (default `0.05`) controls visible wall-clock pacing: one simulated second takes 0.05 wall-clock seconds. Therefore a task with 120 seconds of processing work on a 1.0x server remains visibly `RUNNING` for about 6 seconds, while the same task on a 2.5x server runs for about 2.4 seconds. `SIMULATION_EVENT_DELAY_SEC` (default `0.02`) remains the minimum gap between visible events. `SIMULATION_RUN_TIMEOUT_SEC` (default `3600`) controls the API watchdog, allowing real-time runs with `SIMULATION_TIME_SCALE=1` to finish instead of being marked failed after 120 seconds. These settings affect only wall-clock delivery speed; recorded simulated timings remain unchanged.
 
 The live server IDs are exactly:
 
@@ -168,7 +174,7 @@ Offloading candidates are evaluated using real system constraints:
 
 ---
 
-## 4. Machine Data & Workload Profiles
+## 4. Custom Batch & Workload Profiles
 
 Default machine profiles seeded in the database:
 

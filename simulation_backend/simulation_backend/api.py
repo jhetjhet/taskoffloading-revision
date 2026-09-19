@@ -14,6 +14,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from .algorithms import compute_binary_pso, compute_gbfs
+from .analytics import generate_analytics_report
 from .database import connect
 from .domain import CLOUD_PROFILE, EDGE_PROFILE, ServerId, Task, WorkerServerId
 
@@ -30,6 +31,7 @@ async def lifespan(application: FastAPI):
     application.state.worker_events: dict[str, set[tuple[str, str]]] = {}
     application.state.worker_expected: dict[str, int] = {}
     application.state.worker_waiters: dict[str, asyncio.Event] = {}
+    application.state.event_history: dict[str, list[dict[str, object]]] = {}
     application.state.server_usage_state: dict[str, dict[str, dict[str, int]]] = {}
     application.state.server_usage_seen: dict[str, dict[tuple[str, str, str], str]] = {}
     application.state.event_bridge = asyncio.create_task(_bridge_worker_events(application))
@@ -177,8 +179,8 @@ async def ping_server(server_id: str) -> dict[str, object]:
 
 
 @app.get("/api/v1/machines")
-async def machines() -> list[dict[str, str]]:
-    rows = await app.state.db.fetch("SELECT id, name FROM machines ORDER BY id")
+async def machines() -> list[dict[str, str | None]]:
+    rows = await app.state.db.fetch("SELECT id, name, image FROM machines ORDER BY id")
     return [dict(row) for row in rows]
 
 
@@ -210,6 +212,7 @@ async def workload_preview(machine_id: str) -> dict:
 async def create_run(request: RunRequest) -> dict[str, str]:
     tasks = await _resolve_tasks(request)
     run_id = str(uuid4())
+    app.state.event_history[run_id] = []
     input_data = {"tasks": [asdict(task) for task in tasks]}
     await app.state.db.execute(
         "INSERT INTO simulation_runs (id, status, seed, input) VALUES ($1, 'QUEUED', $2, $3::jsonb)",
@@ -231,9 +234,12 @@ async def get_run(run_id: str) -> dict:
         "FROM algorithm_results WHERE run_id = $1 ORDER BY algorithm",
         run_id,
     )
+    input_data = _json_value(run["input"])
+    analytics = input_data.get("analytics") if isinstance(input_data, dict) else None
     return {
         **dict(run),
-        "input": _json_value(run["input"]),
+        "input": input_data,
+        "analytics": analytics,
         "algorithms": [
             {
                 **dict(result),
@@ -243,6 +249,34 @@ async def get_run(run_id: str) -> dict:
             for result in results
         ],
     }
+
+
+@app.get("/api/v1/runs/{run_id}/analytics")
+async def get_run_analytics(run_id: str) -> dict:
+    """Dedicated endpoint providing the complete 6-section dashboard metrics report."""
+    run = await app.state.db.fetchrow("SELECT id, status, input FROM simulation_runs WHERE id = $1", run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="run not found")
+    
+    input_data = _json_value(run["input"])
+    if isinstance(input_data, dict) and "analytics" in input_data:
+        return {"run_id": run_id, "status": run["status"], "analytics": input_data["analytics"]}
+    
+    # Fallback compute if completed run doesn't have it yet
+    tasks_input = input_data.get("tasks", []) if isinstance(input_data, dict) else []
+    if not tasks_input:
+        raise HTTPException(status_code=400, detail="no tasks found for this run")
+    
+    tasks = [Task(**t) for t in tasks_input]
+    gbfs = await asyncio.to_thread(compute_gbfs, tasks, PROFILES)
+    pso = await asyncio.to_thread(compute_binary_pso, tasks, PROFILES)
+    
+    actual_rows = await app.state.db.fetch(
+        "SELECT algorithm, task_id, status, total_latency_sec, execution_time_sec FROM task_execution_results WHERE run_id = $1",
+        run_id,
+    )
+    report_data = generate_analytics_report(tasks, gbfs, pso, [dict(r) for r in actual_rows])
+    return {"run_id": run_id, "status": run["status"], "analytics": report_data}
 
 
 @app.get("/api/v1/runs")
@@ -259,15 +293,31 @@ async def history(limit: int = 50) -> list[dict]:
 async def join_run(sid: str, data: dict[str, str]) -> None:
     if run_id := data.get("run_id"):
         await sio.enter_room(sid, run_id)
+        for event in app.state.event_history.get(run_id, []):
+            await sio.emit(event["name"], event["payload"], to=sid)
+
+
+async def _emit_run_event(run_id: str, name: str, payload: dict[str, object]) -> None:
+    app.state.event_history.setdefault(run_id, []).append({"name": name, "payload": payload})
+    await sio.emit(name, payload, room=run_id)
 
 
 async def _execute_run(run_id: str, tasks: list[Task], seed: int) -> None:
     await app.state.db.execute("UPDATE simulation_runs SET status = 'RUNNING' WHERE id = $1", run_id)
-    await sio.emit("run", {"run_id": run_id, "status": "RUNNING"}, room=run_id)
+    await _emit_run_event(run_id, "run", {"run_id": run_id, "status": "RUNNING"})
     try:
+        forecast_tick_sec = max(
+            0.01, float(os.environ.get("SIMULATION_FORECAST_TICK_SEC", "0.1"))
+        )
         gbfs, pso = await asyncio.gather(
-            asyncio.to_thread(compute_gbfs, tasks, PROFILES),
-            asyncio.to_thread(compute_binary_pso, tasks, PROFILES, seed=seed),
+            asyncio.to_thread(compute_gbfs, tasks, PROFILES, forecast_tick_sec),
+            asyncio.to_thread(
+                compute_binary_pso,
+                tasks,
+                PROFILES,
+                seed=seed,
+                tick_sec=forecast_tick_sec,
+            ),
         )
         app.state.worker_events[run_id] = set()
         app.state.worker_expected[run_id] = len(tasks) * 2
@@ -280,36 +330,88 @@ async def _execute_run(run_id: str, tasks: list[Task], seed: int) -> None:
             await _dispatch_workers(run_id, algorithm, tasks, result.allocation)
             for server in ServerId:
                 await _emit_server_usage_snapshot(run_id, algorithm, server.value, {"TRANSFERRING": 0, "IN_QUEUE": 0, "RUNNING": 0, "FINISHED": 0, "FAILED": 0})
-            await sio.emit("algorithm", {"run_id": run_id, "algorithm": algorithm, **serialized}, room=run_id)
-        await asyncio.wait_for(app.state.worker_waiters[run_id].wait(), timeout=120)
-        await app.state.db.execute(
-            "UPDATE simulation_runs SET status = 'COMPLETED', completed_at = now() WHERE id = $1", run_id
+            await _emit_run_event(run_id, "algorithm", {"run_id": run_id, "algorithm": algorithm, **serialized})
+
+        # Stream the decision-making traces in real-time so UI visualizes thinking phase
+        trace_delay = max(0.05, float(os.environ.get("SIMULATION_DECISION_STEP_DELAY_SEC", "0.15")))
+
+        async def _stream_gbfs_trace():
+            for step in getattr(gbfs, "telemetry", []):
+                await _emit_run_event(run_id, "gbfs_decision_step", {"run_id": run_id, "algorithm": "GBFS", **step})
+                await asyncio.sleep(trace_delay)
+
+        async def _stream_pso_trace():
+            for iter_snap in getattr(pso, "telemetry", []):
+                await _emit_run_event(run_id, "pso_decision_step", {"run_id": run_id, "algorithm": "PSO", **iter_snap})
+                await asyncio.sleep(trace_delay * 0.5)
+
+        await asyncio.gather(_stream_gbfs_trace(), _stream_pso_trace())
+        run_timeout_sec = max(
+            30.0, float(os.environ.get("SIMULATION_RUN_TIMEOUT_SEC", "3600"))
         )
-        await sio.emit("run_complete", {"run_id": run_id, "status": "COMPLETED"}, room=run_id)
+        await asyncio.wait_for(
+            app.state.worker_waiters[run_id].wait(), timeout=run_timeout_sec
+        )
+
+        # Retrieve actual task execution records from DB for validation
+        actual_rows = await app.state.db.fetch(
+            "SELECT algorithm, task_id, status, total_latency_sec, execution_time_sec FROM task_execution_results WHERE run_id = $1",
+            run_id,
+        )
+        actual_task_dicts = [dict(r) for r in actual_rows]
+
+        # Generate comprehensive 6-section dashboard analytics report
+        report_data = generate_analytics_report(tasks, gbfs, pso, actual_task_dicts)
+
+        # Store analytics JSON in simulation_runs input/summary or output
+        await app.state.db.execute(
+            """
+            UPDATE simulation_runs 
+            SET status = 'COMPLETED', completed_at = now(), input = jsonb_set(input, '{analytics}', $2::jsonb, true)
+            WHERE id = $1
+            """,
+            run_id,
+            json.dumps(report_data),
+        )
+        await _emit_run_event(run_id, "run_complete", {"run_id": run_id, "status": "COMPLETED", "analytics": report_data})
     except Exception as error:
         await app.state.db.execute("UPDATE simulation_runs SET status = 'FAILED' WHERE id = $1", run_id)
-        await sio.emit("run_failed", {"run_id": run_id, "error": str(error)}, room=run_id)
+        await _emit_run_event(run_id, "run_failed", {"run_id": run_id, "error": str(error)})
     finally:
         app.state.worker_events.pop(run_id, None)
         app.state.worker_expected.pop(run_id, None)
         app.state.worker_waiters.pop(run_id, None)
         app.state.server_usage_state.pop(run_id, None)
         app.state.server_usage_seen.pop(run_id, None)
+        if len(app.state.event_history.get(run_id, [])) > 5000:
+            app.state.event_history[run_id] = app.state.event_history[run_id][-5000:]
+
+
+# Maps raw ServerId values to the semantic placement labels the frontend expects.
+_PLACEMENT_LABEL: dict[str, str] = {
+    ServerId.EDGE.value: "EDGE",
+    ServerId.CLOUD.value: "CLOUD",
+}
 
 
 def _build_server_usage_snapshot(server_id: str, algorithm: str, counts: dict[str, int]) -> dict[str, object]:
+    """Build the initial zero-state snapshot emitted before workers start.
+
+    NOTE: Once the simulation is running the workers publish their own
+    ``server_usage`` events (via the engine's on_event callback) which
+    carry accurate cpu/memory/storage_utilization_percent values computed
+    from actual task demands.  This function is only used for the initial
+    snapshot where all counts are zero.
+    """
     tasks_in_flight = counts.get("TRANSFERRING", 0) + counts.get("IN_QUEUE", 0) + counts.get("RUNNING", 0)
-    cpu_utilization_percent = 0.0
-    memory_utilization_percent = 0.0
-    total = sum(counts.values())
-    if total > 0:
-        cpu_utilization_percent = round((counts.get("RUNNING", 0) / total) * 100.0, 2)
-        memory_utilization_percent = round((tasks_in_flight / total) * 100.0, 2)
     status = "IDLE" if tasks_in_flight == 0 else "BUSY"
     if counts.get("FAILED", 0) and tasks_in_flight == 0:
         status = "DEGRADED"
 
-    placement = server_id.rsplit(":", 1)[-1]
+    # "GBFS:SERVER_A" → raw_server = "SERVER_A" → placement = "EDGE"
+    raw_server = server_id.rsplit(":", 1)[-1]
+    placement = _PLACEMENT_LABEL.get(raw_server, raw_server)
+
     return {
         "server_id": server_id,
         "algorithm": algorithm,
@@ -320,15 +422,16 @@ def _build_server_usage_snapshot(server_id: str, algorithm: str, counts: dict[st
         "running_tasks": counts.get("RUNNING", 0),
         "finished_tasks": counts.get("FINISHED", 0),
         "failed_tasks": counts.get("FAILED", 0),
-        "cpu_utilization_percent": cpu_utilization_percent,
-        "memory_utilization_percent": memory_utilization_percent,
+        "cpu_utilization_percent": 0.0,
+        "memory_utilization_percent": 0.0,
+        "storage_utilization_percent": 0.0,
     }
 
 
 async def _emit_server_usage_snapshot(run_id: str, algorithm: str, server_id: str, counts: dict[str, int]) -> None:
     server_key = f"{algorithm}:{server_id}"
     payload = _build_server_usage_snapshot(server_key, algorithm, counts)
-    await sio.emit("server_usage", {"run_id": run_id, **payload}, room=run_id)
+    await _emit_run_event(run_id, "server_usage", {"run_id": run_id, **payload})
 
 
 async def _persist_result(run_id: str, algorithm: str, result: dict) -> None:
@@ -381,6 +484,7 @@ def _serialize_result(result: object) -> dict:
         "allocation": [server.value for server in result.allocation],
         "iterations_performed": result.iterations_performed,
         "failed_count": result.simulation.failed_count,
+        "telemetry": getattr(result, "telemetry", []),
         "tasks": [
             {
                 "task_id": task.task_id,
@@ -427,8 +531,8 @@ async def _bridge_worker_events(application: FastAPI) -> None:
                 if status in counts:
                     counts[status] += 1
                 seen[task_key] = status
-                await _emit_server_usage_snapshot(run_id, algorithm, server_name, counts)
-            await sio.emit(event, payload, room=payload["run_id"])
+            event_payload = {"run_id": payload["run_id"], **payload}
+            await _emit_run_event(payload["run_id"], event, event_payload)
             if event == "task" and payload["status"] in {"FINISHED", "FAILED"}:
                 received = application.state.worker_events.get(payload["run_id"])
                 expected = application.state.worker_expected.get(payload["run_id"])

@@ -1,8 +1,16 @@
 import React from "react";
 import { useT } from "../../context/ThemeContext";
 
-export const Sidebar = ({ step, maxReached, onJump, serverStatuses }) => {
+export const SIDEBAR_STEPS = [
+  { id: "machines", label: "Machines" },
+  { id: "workloads", label: "Workloads" },
+  { id: "offloading", label: "Offloading" },
+  { id: "reports", label: "Reports" },
+];
+
+export const Sidebar = ({ step, maxReached, onJump }) => {
   const T = useT();
+  
   return (
     <div
       style={{
@@ -69,13 +77,15 @@ export const Sidebar = ({ step, maxReached, onJump, serverStatuses }) => {
         >
           Pipeline
         </div>
-        {Array.from({ length: 5 }).map((_, i) => {
+        
+        {SIDEBAR_STEPS.map((item, i) => {
           const active = i === step;
           const done = i < step;
           const clickable = i <= maxReached;
+          
           return (
             <button
-              key={i}
+              key={item.id}
               onClick={() => clickable && onJump(i)}
               className={clickable ? "app-btn" : ""}
               style={{
@@ -137,7 +147,7 @@ export const Sidebar = ({ step, maxReached, onJump, serverStatuses }) => {
                     textOverflow: "ellipsis",
                   }}
                 >
-                  SSSSS
+                  {item.label}
                 </div>
               </div>
               {active && (
@@ -155,67 +165,6 @@ export const Sidebar = ({ step, maxReached, onJump, serverStatuses }) => {
           );
         })}
       </div>
-
-      <div style={{ padding: "12px 16px 20px", borderTop: `1px solid ${T.border}` }}>
-        <div
-          style={{
-            fontSize: 13,
-            fontWeight: 700,
-            color: T.dim,
-            textTransform: "uppercase",
-            letterSpacing: "0.1em",
-            marginBottom: 10,
-            fontFamily: T.fontSans,
-          }}
-        >
-          Servers
-        </div>
-        {/* {Object.entries(SERVERS).map(([key, srv]) => {
-          const st = serverStatuses[key];
-          const online = st === "online";
-          return (
-            <div
-              key={key}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-                padding: "7px 10px",
-                borderRadius: 6,
-                marginBottom: 4,
-                background: T.elevated,
-                border: `1px solid ${T.borderSub}`,
-              }}
-            >
-              <div
-                style={{
-                  width: 8,
-                  height: 8,
-                  borderRadius: "50%",
-                  flexShrink: 0,
-                  background: online ? T.green : st === "checking" ? T.amber : T.red,
-                }}
-              />
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 14, color: T.text, fontFamily: T.fontMono, lineHeight: 1 }}>
-                  {srv.label}
-                </div>
-                <div
-                  style={{
-                    fontSize: 13,
-                    color: T.muted,
-                    fontFamily: T.fontMono,
-                    marginTop: 2,
-                  }}
-                >
-                  {online ? "online" : st === "checking" ? "pinging…" : "offline"}
-                </div>
-              </div>
-            </div>
-          );
-        })} */}
-      </div>
     </div>
   );
 };
-

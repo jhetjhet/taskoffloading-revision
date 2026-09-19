@@ -18,11 +18,14 @@ async def seed() -> None:
                     for row in csv.DictReader(file):
                         await connection.execute(
                             """
-                            INSERT INTO machines (id, name) VALUES ($1, $2)
-                            ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name
+                            INSERT INTO machines (id, name, image) VALUES ($1, $2, $3)
+                            ON CONFLICT (id) DO UPDATE SET
+                                name = EXCLUDED.name,
+                                image = EXCLUDED.image
                             """,
                             row["id"],
                             row["name"],
+                            row["image"] or None,
                         )
                 with (data_dir / "task_templates.csv").open(newline="") as file:
                     for row in csv.DictReader(file):

@@ -1,8 +1,12 @@
 CREATE TABLE IF NOT EXISTS machines (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
+    image TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE machines
+    ADD COLUMN IF NOT EXISTS image TEXT;
 
 CREATE TABLE IF NOT EXISTS task_templates (
     id TEXT PRIMARY KEY,

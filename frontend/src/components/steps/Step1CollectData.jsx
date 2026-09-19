@@ -1,85 +1,93 @@
-import React from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import axios from "axios";
 import { useT } from "../../context/ThemeContext";
-import { WORKLOAD_LABELS } from "../../config/constants";
-import { Stat, Card, TableRow, Th, Badge, InfoBox } from "../common";
+import { Stat, Card, InfoBox, ErrBox, PrimaryBtn } from "../common";
 import { WorkloadSelector } from "./step1/WorkloadSelector";
-import { SelectedWorkloadCard } from "./step1/SelectedWorkloadCard";
 import { TaskBatchPreviewTable } from "./step1/TaskBatchPreviewTable";
+import { buildBenchmarkBatch } from "../../utils/workload";
 
-export const Step1CollectData = ({ machine: m, workload, setWorkload, tasks }) => {
+const simulationApi = axios.create({ baseURL: import.meta.env.VITE_API_URL || "/api/v1" });
+
+export const Step1CollectData = ({ machine, tasks: machineTasks = [], onBatchChange = () => {} }) => {
   const T = useT();
+  const [workload, setWorkload] = useState("mid");
+  const [servers, setServers] = useState([]);
+  const [serverError, setServerError] = useState("");
+  const [customTasksByMachine, setCustomTasksByMachine] = useState({});
+  const [templateId, setTemplateId] = useState("");
+  const [quantity, setQuantity] = useState(1);
+  const lastBatchSignature = useRef("");
+
+  useEffect(() => {
+    simulationApi.get("/servers")
+      .then(({ data }) => setServers(data))
+      .catch(() => setServerError("Unable to load server specifications."));
+  }, []);
+
+  const benchmarkTasks = useMemo(() => {
+    return workload ? buildBenchmarkBatch(workload, machineTasks, servers) : [];
+  }, [machineTasks, servers, workload]);
+
+  const customTasks = customTasksByMachine[machine?.id] || [];
+  const batchTasks = workload ? benchmarkTasks : customTasks;
+  const activeTemplateId = machineTasks.some((task) => task.task_id === templateId)
+    ? templateId
+    : machineTasks[0]?.task_id || "";
+
+  useEffect(() => {
+    const signature = batchTasks.map((task) => task.task_id).join("|");
+    if (signature !== lastBatchSignature.current) {
+      lastBatchSignature.current = signature;
+      onBatchChange(batchTasks);
+    }
+  }, [batchTasks, onBatchChange]);
+
+  const addCustomTasks = () => {
+    const template = machineTasks.find((task) => task.task_id === activeTemplateId);
+    if (!template) return;
+    const additions = Array.from({ length: Math.min(15 - customTasks.length, Math.max(1, Number(quantity))) }, (_, index) => ({
+      ...template,
+      task_id: `${template.task_id}-C${customTasks.length + index + 1}`,
+      batch_index: customTasks.length + index + 1,
+    }));
+    setCustomTasksByMachine((current) => ({
+      ...current,
+      [machine.id]: [...customTasks, ...additions],
+    }));
+  };
   return (
     <div>
+      {!machine ? <InfoBox color="amber">Select a machine first to build its task batch.</InfoBox> : <>
       <div style={{ marginBottom: 20 }}>
-        <h1 style={{ fontSize: 22, fontWeight: 700, color: T.text, margin: 0, fontFamily: T.fontSans }}>Task Parameters</h1>
-        <p style={{ fontSize: 16, color: T.muted, margin: "6px 0 0", fontFamily: T.fontSans }}>
-          {workload ? (
-            <>
-              Showing the <strong style={{ color: T.text }}>{WORKLOAD_LABELS[workload]}</strong> workload for <strong style={{ color: T.text }}>{m.name} ({m.machineId})</strong>.
-            </>
-          ) : (
-            <>
-              Live data fetched for <strong style={{ color: T.text }}>{m.name} ({m.machineId})</strong>.
-            </>
-          )}{" "}
-          {tasks?.length || 0} machine task{tasks?.length === 1 ? "" : "s"} below will be sent to GBFS and PSO using the selected workload filter.
-        </p>
+        <h1 style={{ fontSize: 22, fontWeight: 700, color: T.text, margin: 0, fontFamily: T.fontSans }}>Tasks Batch</h1>
+        <p style={{ color: T.muted, fontFamily: T.fontSans }}>{machine.name} ({machine.id}) · {machineTasks.length} available task templates</p>
       </div>
 
-      <WorkloadSelector machineId={m.machineId} workload={workload} setWorkload={setWorkload} />
+      <WorkloadSelector machineId={machine.id} workload={workload} setWorkload={setWorkload} />
+
+      {!workload && <Card title="Add Custom Tasks" sub="Choose a machine template and add any quantity to this batch" accent={T.blue}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <select value={activeTemplateId} onChange={(event) => setTemplateId(event.target.value)} style={{ flex: "1 1 240px", padding: 10 }}>
+            {machineTasks.map((task) => <option key={task.task_id} value={task.task_id}>{task.task_name}</option>)}
+          </select>
+          <input type="number" min="1" max="15" value={quantity} onChange={(event) => setQuantity(event.target.value)} style={{ width: 90, padding: 10 }} />
+          <PrimaryBtn type="button" className="app-btn" onClick={addCustomTasks}>Add tasks</PrimaryBtn>
+        </div>
+      </Card>}
 
       <div style={{ display: "flex", gap: 12, marginBottom: 16, flexWrap: "wrap" }}>
-        <Stat label="Reference Task Size" value={`${m.taskSize} MB`} color="blue" />
-        <Stat label="Processing Time" value={`${m.processingTime} ms`} color="green" />
-        <Stat label="Bandwidth" value={`${m.bandwidth} Mbps`} color="purple" />
-        <Stat label="Energy Utilization" value={`${m.energyConsumption} kWh`} color="amber" />
+        <Stat label="Batch Type" value={workload || "Custom"} color="blue" />
+        <Stat label="Task Count" value={batchTasks.length} color="green" />
+        <Stat label="Payload" value={`${batchTasks.reduce((sum, task) => sum + Number(task.payload_size_mb || 0), 0).toFixed(1)} MB`} color="purple" />
+        <Stat label="Servers" value={servers.length || "Loading"} color="amber" />
       </div>
 
-      <Card title="Parameter Table" sub={`${m.machineId} · ${workload ? `${WORKLOAD_LABELS[workload]} workload` : "Supabase"} — Current System baseline, for comparison only` } accent={T.blue}>
-        <table style={{ width: "100%", borderCollapse: "collapse" }}>
-          <thead>
-            <tr>
-              <Th>Parameter</Th>
-              <Th>Value</Th>
-              <Th>Description</Th>
-            </tr>
-          </thead>
-          <tbody>
-            {[
-              ["Machine ID", m.machineId, "Unique device identifier"],
-              ["Task Size", `${m.taskSize} MB`, "Data generated per task"],
-              ["Processing Time", `${m.processingTime} ms`, "Local processing time"],
-              ["Queue Length", m.queueLength, "Pending task count"],
-              ["CPU Utilization", `${m.cpuUtilization}%`, "Edge node load"],
-              ["Memory Usage", `${m.memoryUsage} GB`, "RAM consumed"],
-              ["Bandwidth", `${m.bandwidth} Mbps`, "Communication speed"],
-              ["Transmission Delay", `${m.transmissionDelay} ms`, "Network delay"],
-              ["Energy Utilization", `${m.energyConsumption} kWh`, "Energy per cycle"],
-              ["Throughput", `${m.throughput} tasks/min`, "Task completion rate"],
-              ["Avg Latency", `${m.avgLatency} ms`, "End-to-end delay"],
-            ].map(([p, v, d], i) => (
-              <TableRow
-                key={p}
-                isOdd={i % 2 === 1}
-                cells={[
-                  <span style={{ fontFamily: T.fontSans, color: T.text }}>{p}</span>,
-                  <Badge color="blue">{v}</Badge>,
-                  <span style={{ color: T.muted, fontFamily: T.fontSans }}>{d}</span>,
-                ]}
-              />
-            ))}
-          </tbody>
-        </table>
-      </Card>
-
-      <TaskBatchPreviewTable tasks={tasks} />
-
-      <SelectedWorkloadCard machine={m} workload={workload} />
-
-      <InfoBox color="green">
-        Batch ready — GBFS will allocate each task sequentially against the running Edge/Cloud load, and PSO will search whole-batch Edge/Cloud assignments at once.
-      </InfoBox>
+      {serverError && <ErrBox>{serverError}</ErrBox>}
+      <TaskBatchPreviewTable tasks={batchTasks} custom={!workload} onRemoveTask={(index) => setCustomTasksByMachine((current) => ({
+        ...current,
+        [machine.id]: customTasks.filter((_, taskIndex) => taskIndex !== index),
+      }))} />
+      </>}
     </div>
   );
 };
-

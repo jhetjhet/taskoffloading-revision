@@ -7,6 +7,7 @@ from enum import StrEnum
 class ServerId(StrEnum):
     EDGE = "SERVER_A"
     CLOUD = "SERVER_B"
+    LOCAL = "LOCAL_MACHINE"
 
 
 class WorkerServerId(StrEnum):
@@ -34,6 +35,7 @@ class ServerProfile:
     max_ram_mb: float
     cpu_cores: int
     bandwidth_mb_s: float
+    energy_coefficient: float = 0.05
 
     @property
     def cpu_capacity_percent(self) -> float:
@@ -48,6 +50,7 @@ EDGE_PROFILE = ServerProfile(
     max_ram_mb=500.0,
     cpu_cores=2,
     bandwidth_mb_s=100.0,
+    energy_coefficient=0.08,
 )
 
 CLOUD_PROFILE = ServerProfile(
@@ -58,6 +61,18 @@ CLOUD_PROFILE = ServerProfile(
     max_ram_mb=2000.0,
     cpu_cores=8,
     bandwidth_mb_s=100.0,
+    energy_coefficient=0.03,
+)
+
+LOCAL_PROFILE = ServerProfile(
+    server_id=ServerId.LOCAL,
+    network_latency_ms=0.0,
+    processing_speed=0.5,
+    storage_mb=500.0,
+    max_ram_mb=1000.0,
+    cpu_cores=2,
+    bandwidth_mb_s=1000.0,
+    energy_coefficient=0.15,
 )
 
 

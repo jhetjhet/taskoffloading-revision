@@ -1,11 +1,35 @@
 import React from "react";
 import { useT } from "../../../context/ThemeContext";
-import { WORKLOAD_LABELS, WORKLOAD_PRIORITY } from "../../../config/constants";
 import { Card } from "../../common";
 
-export const SelectedWorkloadCard = ({ machine: m, workload }) => {
+
+const WORKLOAD_PRIORITY = {
+  high: "Critical",
+  medium: "Standard",
+  low: "Background"
+};
+
+const WORKLOAD_LABELS = {
+  high: "High Intensity",
+  medium: "Moderate",
+  low: "Low Power"
+};
+
+const DUMMY_MACHINE = {
+  name: "Edge Node Alpha",
+  machineId: "NODE-001",
+  cpuUtilization: 78,
+  memoryUsage: 8.5,
+  taskSize: 45.2,
+  processingTime: 120,
+  queueLength: 14
+};
+
+export const SelectedWorkloadCard = ({ machine = DUMMY_MACHINE, workload = "medium" }) => {
   const T = useT();
-  if (!m) return null;
+
+  if (!machine) return null;
+  const m = machine;
   const priority = workload ? WORKLOAD_PRIORITY[workload] : "Live";
   const label = workload ? WORKLOAD_LABELS[workload] : "Live Data";
   const color = workload === "high" ? T.red : workload === "medium" ? T.amber : workload === "low" ? T.green : T.blue;
@@ -34,4 +58,3 @@ export const SelectedWorkloadCard = ({ machine: m, workload }) => {
     </Card>
   );
 };
-

@@ -47,6 +47,7 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-taskoffloading}:${POSTGRES_PASSWORD:-taskoffloading}@postgres:5432/${POSTGRES_DB:-taskoffloading}
       REDIS_URL: redis://redis:6379/0
+      SIMULATION_RUN_TIMEOUT_SEC: ${SIMULATION_RUN_TIMEOUT_SEC:-3600}
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
@@ -61,7 +62,12 @@ services:
     image: taskoffloading-simulation-worker
     build: { context: ./simulation_backend, dockerfile: Dockerfile }
     command: ["python", "-m", "simulation_backend.worker"]
-    environment: { REDIS_URL: redis://redis:6379/0, SIMULATION_OWNER: GBFS:SERVER_A }
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      SIMULATION_OWNER: "GBFS:SERVER_A"
+      SIMULATION_TIME_SCALE: ${SIMULATION_TIME_SCALE:-0.05}
+      SIMULATION_EVENT_DELAY_SEC: ${SIMULATION_EVENT_DELAY_SEC:-0.02}
+      SIMULATION_EXECUTION_TICK_SEC: ${SIMULATION_EXECUTION_TICK_SEC:-0.01}
     depends_on: { redis: { condition: service_healthy } }
     networks: [taskoffloading-net]
 
@@ -69,7 +75,12 @@ services:
     image: taskoffloading-simulation-worker
     build: { context: ./simulation_backend, dockerfile: Dockerfile }
     command: ["python", "-m", "simulation_backend.worker"]
-    environment: { REDIS_URL: redis://redis:6379/0, SIMULATION_OWNER: GBFS:SERVER_B }
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      SIMULATION_OWNER: "GBFS:SERVER_B"
+      SIMULATION_TIME_SCALE: ${SIMULATION_TIME_SCALE:-0.05}
+      SIMULATION_EVENT_DELAY_SEC: ${SIMULATION_EVENT_DELAY_SEC:-0.02}
+      SIMULATION_EXECUTION_TICK_SEC: ${SIMULATION_EXECUTION_TICK_SEC:-0.01}
     depends_on: { redis: { condition: service_healthy } }
     networks: [taskoffloading-net]
 
@@ -77,7 +88,12 @@ services:
     image: taskoffloading-simulation-worker
     build: { context: ./simulation_backend, dockerfile: Dockerfile }
     command: ["python", "-m", "simulation_backend.worker"]
-    environment: { REDIS_URL: redis://redis:6379/0, SIMULATION_OWNER: PSO:SERVER_A }
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      SIMULATION_OWNER: "PSO:SERVER_A"
+      SIMULATION_TIME_SCALE: ${SIMULATION_TIME_SCALE:-0.05}
+      SIMULATION_EVENT_DELAY_SEC: ${SIMULATION_EVENT_DELAY_SEC:-0.02}
+      SIMULATION_EXECUTION_TICK_SEC: ${SIMULATION_EXECUTION_TICK_SEC:-0.01}
     depends_on: { redis: { condition: service_healthy } }
     networks: [taskoffloading-net]
 
@@ -85,30 +101,35 @@ services:
     image: taskoffloading-simulation-worker
     build: { context: ./simulation_backend, dockerfile: Dockerfile }
     command: ["python", "-m", "simulation_backend.worker"]
-    environment: { REDIS_URL: redis://redis:6379/0, SIMULATION_OWNER: PSO:SERVER_B }
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      SIMULATION_OWNER: "PSO:SERVER_B"
+      SIMULATION_TIME_SCALE: ${SIMULATION_TIME_SCALE:-0.05}
+      SIMULATION_EVENT_DELAY_SEC: ${SIMULATION_EVENT_DELAY_SEC:-0.02}
+      SIMULATION_EXECUTION_TICK_SEC: ${SIMULATION_EXECUTION_TICK_SEC:-0.01}
     depends_on: { redis: { condition: service_healthy } }
     networks: [taskoffloading-net]
 
-  frontend:
-    image: taskoffloading-frontend
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    container_name: taskoffloading-frontend
-    ports:
-      - "${FRONTEND_PORT:-5173}:80"
-    depends_on:
-      simulation-api:
-        condition: service_healthy
-    restart: unless-stopped
-    networks:
-      - taskoffloading-net
-    healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:80/"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 5s
+  # frontend:
+  #   image: taskoffloading-frontend
+  #   build:
+  #     context: ./frontend
+  #     dockerfile: Dockerfile
+  #   container_name: taskoffloading-frontend
+  #   ports:
+  #     - "${FRONTEND_PORT:-5173}:80"
+  #   depends_on:
+  #     simulation-api:
+  #       condition: service_healthy
+  #   restart: unless-stopped
+  #   networks:
+  #     - taskoffloading-net
+  #   healthcheck:
+  #     test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:80/"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 3
+  #     start_period: 5s
 
 networks:
   taskoffloading-net:

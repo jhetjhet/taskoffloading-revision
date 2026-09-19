@@ -1,78 +1,179 @@
 import React from "react";
 import { useT } from "../../../context/ThemeContext";
-import { resolveServer, PSO_STEPS } from "../../../config/constants";
 import { Card, EvalTh } from "../../common";
 import { StepPipeline } from "./StepPipeline";
 import { PSOTrack } from "./PSOTrack";
 
-export const PSOExecutionPanel = ({ machine: m, sim, iteration }) => {
+const PSO_PIPELINE = [
+  "Task Input",
+  "Init Particles",
+  "Evaluate Fitness",
+  "Update Bests",
+  "Update Positions",
+  "Converge",
+  "Decision",
+];
+
+export const PSOExecutionPanel = ({ currentStep, allSteps = [], isRunning }) => {
   const T = useT();
-  if (!sim) return null;
-  const done = iteration >= sim.iterations.length;
-  const srv = resolveServer(sim.recommendedServer);
-  const currentRow = iteration > 0 ? sim.iterations[iteration - 1] : null;
+
+  const activeStep = currentStep || allSteps[allSteps.length - 1];
+  const iterNum = activeStep?.iteration ?? 0;
+  const totalIters = activeStep?.total_iterations ?? 40;
+  const bestFit = activeStep?.best_fitness ?? 0;
+  const bestX = activeStep?.best_x ?? 0;
+  const edgeTaskCount = activeStep?.edge_task_count ?? 0;
+  const cloudTaskCount = activeStep?.cloud_task_count ?? 0;
+  const allocation = activeStep?.global_allocation || [];
+  const allocationTitle = edgeTaskCount > 0 && cloudTaskCount > 0
+    ? "mixed allocation"
+    : cloudTaskCount > 0
+    ? "Cloud Server B"
+    : "Edge Server A";
+  const allocationLabel = allocation.length
+    ? allocation.map((server, index) => `${index + 1}:${server === "SERVER_B" ? "Cloud" : "Edge"}`).join(" · ")
+    : "Awaiting allocation";
+  const particles = activeStep?.particles || [];
+
+  const done = allSteps.length > 0 && iterNum >= totalIters;
   const pipelineIdx = done
-    ? PSO_STEPS.length - 1
-    : iteration === 0
+    ? PSO_PIPELINE.length - 1
+    : !activeStep && !isRunning
     ? 0
-    : Math.min(PSO_STEPS.length - 2, 1 + Math.floor(((iteration - 1) / sim.iterations.length) * 4));
+    : iterNum === 0
+    ? 1
+    : Math.min(PSO_PIPELINE.length - 2, 2 + Math.floor((iterNum / totalIters) * 4));
 
   return (
-    <Card title="PSO Execution Simulation" sub="Particle Swarm Optimization — iterative convergence" accent={T.purple}>
-      <StepPipeline steps={PSO_STEPS} activeIdx={pipelineIdx} activeColor={T.purple} activeText="#2a0016" />
+    <Card
+      title="PSO EXECUTION SIMULATION"
+      sub="Particle Swarm Optimization — iterative convergence"
+      accent={T.purple}
+    >
+      <StepPipeline
+        steps={PSO_PIPELINE}
+        activeIdx={pipelineIdx}
+        activeColor={T.purple}
+        activeText="#2a0016"
+      />
 
-      <div style={{ fontFamily: T.fontMono, fontSize: 12, color: T.muted }}>
-        {currentRow ? (
+      <div style={{ fontFamily: T.fontMono, fontSize: 13, color: T.muted, marginBottom: 4 }}>
+        {activeStep ? (
           <>
-            Iteration <strong style={{ color: T.purple }}>{currentRow.iteration}</strong> / {sim.iterations.length} · global best fitness <strong style={{ color: T.purple }}>{currentRow.bestFitness}</strong> → {resolveServer(currentRow.bestX < 0.5 ? "A" : "B").label}
+            Iteration <strong style={{ color: T.purple }}>{iterNum}</strong> / {totalIters} · global best fitness{" "}
+              <strong style={{ color: T.purple }}>{bestFit}</strong> · Edge {edgeTaskCount} / Cloud {cloudTaskCount}
           </>
         ) : (
-          "Awaiting task…"
+          "Awaiting swarm convergence…"
         )}
       </div>
-      <PSOTrack row={currentRow} />
+
+      <PSOTrack bestX={bestX} particles={particles} />
 
       <table style={{ width: "100%", borderCollapse: "collapse", marginTop: 8 }}>
         <thead>
           <tr>
-            <EvalTh>Particle</EvalTh>
-            <EvalTh>Position (x)</EvalTh>
-            <EvalTh>Fitness</EvalTh>
-            <EvalTh>Leaning</EvalTh>
+            <EvalTh>PARTICLE</EvalTh>
+            <EvalTh>POSITION (X)</EvalTh>
+            <EvalTh>FITNESS</EvalTh>
+            <EvalTh>LEANING</EvalTh>
           </tr>
         </thead>
         <tbody>
-          {currentRow ? (
-            [
-              { name: "P1", ...currentRow.particleA },
-              { name: "P2", ...currentRow.particleB },
-            ].map((p) => (
+          {particles.length > 0 ? (
+            particles.map((p) => (
               <tr key={p.name}>
-                <td style={{ padding: "6px 8px", fontFamily: T.fontMono, fontSize: 13, color: T.text, borderBottom: `1px solid ${T.borderSub}` }}>{p.name}</td>
-                <td style={{ padding: "6px 8px", fontFamily: T.fontMono, fontSize: 13, color: T.muted, borderBottom: `1px solid ${T.borderSub}` }}>{p.x}</td>
-                <td style={{ padding: "6px 8px", fontFamily: T.fontMono, fontSize: 13, color: T.muted, borderBottom: `1px solid ${T.borderSub}` }}>{p.fitness}</td>
-                <td style={{ padding: "6px 8px", fontFamily: T.fontMono, fontSize: 13, color: T.muted, borderBottom: `1px solid ${T.borderSub}` }}>{resolveServer(p.x < 0.5 ? "A" : "B").label}</td>
+                <td
+                  style={{
+                    padding: "6px 8px",
+                    fontFamily: T.fontMono,
+                    fontSize: 13,
+                    color: T.text,
+                    borderBottom: `1px solid ${T.borderSub}`,
+                  }}
+                >
+                  {p.name}
+                </td>
+                <td
+                  style={{
+                    padding: "6px 8px",
+                    fontFamily: T.fontMono,
+                    fontSize: 13,
+                    color: T.muted,
+                    borderBottom: `1px solid ${T.borderSub}`,
+                  }}
+                >
+                  {p.x}
+                </td>
+                <td
+                  style={{
+                    padding: "6px 8px",
+                    fontFamily: T.fontMono,
+                    fontSize: 13,
+                    color: T.muted,
+                    borderBottom: `1px solid ${T.borderSub}`,
+                  }}
+                >
+                  {p.fitness}
+                </td>
+                <td
+                  style={{
+                    padding: "6px 8px",
+                    fontFamily: T.fontMono,
+                    fontSize: 13,
+                    color: p.leaning.includes("Cloud") ? T.purple : T.green,
+                    borderBottom: `1px solid ${T.borderSub}`,
+                  }}
+                >
+                  {p.leaning}
+                </td>
               </tr>
             ))
           ) : (
             <tr>
-              <td colSpan={4} style={{ padding: "10px 8px", fontFamily: T.fontMono, fontSize: 13, color: T.dim }}>—</td>
+              <td
+                colSpan={4}
+                style={{ padding: "10px 8px", fontFamily: T.fontMono, fontSize: 13, color: T.dim }}
+              >
+                —
+              </td>
             </tr>
           )}
         </tbody>
       </table>
 
       {done && (
-        <div style={{ marginTop: 12, background: T.purpleBg, border: `1px solid ${T.purpleDim}`, borderLeft: `3px solid ${T.purple}`, borderRadius: 8, padding: "12px 16px" }}>
-          <div style={{ fontSize: 13, color: T.purple, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", fontFamily: T.fontSans, marginBottom: 6 }}>Final PSO Result</div>
-          <div style={{ fontSize: 15, fontFamily: T.fontMono, color: T.text }}>Server: <strong>{srv.icon} {srv.label}</strong></div>
-          <div style={{ fontSize: 15, fontFamily: T.fontMono, color: T.text }}>Latency: <strong>{sim.latency} ms</strong></div>
-          <div style={{ fontSize: 15, fontFamily: T.fontMono, color: T.text }}>Processing Time: <strong>{sim.time} ms</strong></div>
-          <div style={{ fontSize: 15, fontFamily: T.fontMono, color: T.text }}>Resource Utilization: <strong>{sim.utilization}%</strong></div>
-          <div style={{ fontSize: 13, color: T.muted, fontFamily: T.fontSans, marginTop: 6 }}>{sim.decisionReason}</div>
+        <div
+          style={{
+            marginTop: 12,
+            background: T.purpleBg,
+            border: `1px solid ${T.purpleDim}`,
+            borderLeft: `3px solid ${T.purple}`,
+            borderRadius: 8,
+            padding: "10px 14px",
+          }}
+        >
+          <div
+            style={{
+              fontSize: 11,
+              color: T.purple,
+              fontWeight: 700,
+              textTransform: "uppercase",
+              letterSpacing: "0.06em",
+              fontFamily: T.fontSans,
+              marginBottom: 4,
+            }}
+          >
+            Final PSO Swarm Converged
+          </div>
+          <div style={{ fontSize: 13, fontFamily: T.fontMono, color: T.text }}>
+            Swarm Global Optimum: <strong>{allocationTitle}</strong> (Fitness: {bestFit})
+          </div>
+          <div style={{ marginTop: 6, fontSize: 11, color: T.muted, fontFamily: T.fontMono, lineHeight: 1.5 }}>
+            Global-best assignments: {allocationLabel}
+          </div>
         </div>
       )}
     </Card>
   );
 };
-

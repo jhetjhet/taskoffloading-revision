@@ -1,23 +1,23 @@
 import React from "react";
 import { useT } from "../../../context/ThemeContext";
-import { WORKLOAD_TIERS, WORKLOAD_LABELS } from "../../../config/constants";
 import { Card, InfoBox } from "../../common";
 
-export const WorkloadSelector = ({ machineId, workload, setWorkload }) => {
-  const T = useT();
-  const hasTiers = !!WORKLOAD_TIERS[machineId];
-  if (!hasTiers) return null;
-
+export const WorkloadSelector = ({
+  machineId = "Selected machine",
+  workload = "mid",
+  setWorkload = () => {},
+}) => {
   const options = [
-    { key: null, label: "Machine Data" },
+    { key: null, label: "Custom Batch" },
     { key: "low", label: "Low" },
-    { key: "medium", label: "Medium" },
+    { key: "mid", label: "Mid" },
     { key: "high", label: "High" },
   ];
-  const tierColor = { low: T.green, medium: T.amber, high: T.red };
+  const T = useT();
+  const tierColor = { low: T.green, mid: T.amber, high: T.red };
 
   return (
-    <Card title="Workload Level" sub={`${machineId} · Machine Data or assigned Low / Medium / High parameter sets`} accent={T.purple}>
+    <Card title="Workload Level" sub={`${machineId} · Custom Batch or server-sized benchmark`} accent={T.purple}>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         {options.map((opt) => {
           const active = workload === opt.key;
@@ -48,12 +48,11 @@ export const WorkloadSelector = ({ machineId, workload, setWorkload }) => {
       </div>
       {workload && (
         <div style={{ marginTop: 12 }}>
-          <InfoBox color={workload === "high" ? "red" : workload === "medium" ? "amber" : "green"}>
-            Showing tasks that can run at the <strong>{WORKLOAD_LABELS[workload]}</strong> workload level — lower workload tasks remain available at higher levels.
+          <InfoBox color={workload === "high" ? "red" : workload === "mid" ? "amber" : "green"}>
+            Benchmark batch size is calculated from the selected machine templates and Edge/Cloud server capacity.
           </InfoBox>
         </div>
       )}
     </Card>
   );
 };
-
