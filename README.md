@@ -153,6 +153,8 @@ Heuristic Score = Estimated Network Time + (0.8 * Estimated Queue Backlog) + (0.
   - **Early Tasks**: With empty queues and available RAM, Edge Server A is greedily favored due to lower network latency (`50 ms` vs `120 ms`).
   - **Mid to Late Tasks**: As Edge Server A accumulates queue backlog and reaches its 500 MB RAM or 250 MB storage buffer limit, the heuristic score for Edge increases significantly or Edge becomes infeasible. GBFS dynamically routes subsequent tasks to Cloud Server B (`2.5x` processing speed, `2000 MB` RAM, `8 cores`).
 
+> **Note**: After each allocation, the cumulative busy time estimate is updated with a `0.2s` natural decay factor per scheduling step to approximate tasks completing concurrently with new arrivals: `Busy_Time += (T_exec / CPU_Cores) - 0.2`.
+
 ---
 
 ### 4.2 Binary Particle Swarm Optimization (Binary PSO)
@@ -289,11 +291,11 @@ socket.emit("join_run", { run_id: "<uuid>" });
 The database is seeded from CSV templates (`simulation_backend/data/`):
 
 ### Seeded Machines
-1. **`M1` (CNC Plasma Cutter)**: Heavy duty high-heat plasma cutting machine.
-2. **`M2` (Laser Cutting System)**: High precision CNC fiber laser cutter.
-3. **`M3` (Robotic Paint Booth)**: Automated industrial spray painting cell.
-4. **`M4` (Robotic Arc Welder)**: Multi-axis robotic welding arm.
-5. **`M5` (Hydraulic Shearing Machine)**: Heavy metal plate cutting and stamping.
+1. **`CPCM1` (CNC Plasma Cutting)**: Heavy duty high-heat CNC plasma cutting machine.
+2. **`PCM1` (Plasma Cutting)**: CNC plasma cutter for plates and shapes.
+3. **`PB2` (Paint Booth)**: Automated industrial spray painting cell.
+4. **`WM1` (Arc Welding)**: Multi-axis robotic welding arm.
+5. **`SM3` (Shearing Machine)**: Heavy metal plate cutting and stamping.
 
 ### Workload Sizing Scheme
 - **Low**: Sized for `35%` edge server capacity footprint.
