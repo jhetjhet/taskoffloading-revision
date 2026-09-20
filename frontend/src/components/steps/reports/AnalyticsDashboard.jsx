@@ -50,7 +50,17 @@ const RawPerformance = ({ analytics, T }) => {
               <span>{label}</span>,
               <span>{format(analytics.gbfs?.[key])} {unit}</span>,
               <span>{format(analytics.pso?.[key])} {unit}</span>,
-              <span>{key === "throughput_mb_s" ? (analytics.gbfs?.[key] >= analytics.pso?.[key] ? "GBFS" : "PSO") : (analytics.gbfs?.[key] <= analytics.pso?.[key] ? "GBFS" : "PSO")}</span>,
+              <span>
+                {analytics.gbfs?.[key] === analytics.pso?.[key]
+                  ? "Equal"
+                  : key === "throughput_mb_s"
+                    ? analytics.gbfs?.[key] > analytics.pso?.[key]
+                      ? "GBFS"
+                      : "PSO"
+                    : analytics.gbfs?.[key] < analytics.pso?.[key]
+                      ? "GBFS"
+                      : "PSO"}
+              </span>,
             ]} />
           ))}</tbody>
         </table>
