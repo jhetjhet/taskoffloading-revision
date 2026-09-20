@@ -19,7 +19,9 @@ const serverCapacity = (server, tasks) => {
   );
 };
 
-export const getBenchmarkTaskCount = (workload, tasks, servers, maximum = 15) => {
+const MAX_BATCH_SIZE = Number(import.meta.env.VITE_MAX_BATCH_SIZE) || 15;
+
+export const getBenchmarkTaskCount = (workload, tasks, servers, maximum = MAX_BATCH_SIZE) => {
   if (!tasks?.length || !servers?.length || !WORKLOAD_TARGETS[workload]) return 0;
   const profiles = servers.filter((server) => server.placement === "EDGE" || server.placement === "CLOUD");
   const uniqueProfiles = profiles.filter((server, index, list) => (

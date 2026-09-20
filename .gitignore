@@ -218,3 +218,5 @@ Desktop.ini
 *.pyd
 
 plan.md
+docker_push.sh
+docker_prod_run.sh

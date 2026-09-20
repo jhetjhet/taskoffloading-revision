@@ -30,9 +30,9 @@ export const PSOExecutionPanel = ({ currentStep, allSteps = [], isRunning }) => 
     : cloudTaskCount > 0
     ? "Cloud Server B"
     : "Edge Server A";
-  const allocationLabel = allocation.length
-    ? allocation.map((server, index) => `${index + 1}:${server === "SERVER_B" ? "Cloud" : "Edge"}`).join(" · ")
-    : "Awaiting allocation";
+  // const allocationLabel = allocation.length
+  //   ? allocation.map((server, index) => `${index + 1}:${server === "SERVER_B" ? "Cloud" : "Edge"}`).join(" · ")
+  //   : "Awaiting allocation";
   const particles = activeStep?.particles || [];
 
   const done = allSteps.length > 0 && iterNum >= totalIters;
@@ -169,9 +169,9 @@ export const PSOExecutionPanel = ({ currentStep, allSteps = [], isRunning }) => 
           <div style={{ fontSize: 13, fontFamily: T.fontMono, color: T.text }}>
             Swarm Global Optimum: <strong>{allocationTitle}</strong> (Fitness: {bestFit})
           </div>
-          <div style={{ marginTop: 6, fontSize: 11, color: T.muted, fontFamily: T.fontMono, lineHeight: 1.5 }}>
+          {/* <div style={{ marginTop: 6, fontSize: 11, color: T.muted, fontFamily: T.fontMono, lineHeight: 1.5 }}>
             Global-best assignments: {allocationLabel}
-          </div>
+          </div> */}
         </div>
       )}
     </Card>

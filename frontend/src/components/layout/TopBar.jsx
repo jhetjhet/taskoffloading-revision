@@ -1,7 +1,7 @@
 import React from "react";
 import { useT } from "../../context/ThemeContext";
 
-export const TopBar = ({ step, dark, setDark }) => {
+export const TopBar = ({ view, step, dark, setDark }) => {
   const T = useT();
 
   return (
@@ -25,44 +25,6 @@ export const TopBar = ({ step, dark, setDark }) => {
     >
 
       <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10 }}>
-        {/* {workload && (
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 6,
-              fontSize: 14,
-              fontFamily: T.fontMono,
-              color: workload === "high" ? T.red : workload === "medium" ? T.amber : T.green,
-              background: workload === "high" ? T.redBg : workload === "medium" ? T.amberBg : T.greenBg,
-              border: `1px solid ${T.border}`,
-              borderRadius: 4,
-              padding: "3px 10px",
-            }}
-          >
-            <span style={{ fontSize: 12, opacity: 0.7 }}>workload →</span>
-            {WORKLOAD_LABELS[workload]}
-          </div>
-        )} */}
-        {/* {srv && (
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 6,
-              fontSize: 14,
-              fontFamily: T.fontMono,
-              color: srvAccent,
-              background: srvAccentBg,
-              border: `1px solid ${srvAccentDim}`,
-              borderRadius: 4,
-              padding: "3px 10px",
-            }}
-          >
-            <span style={{ fontSize: 12, opacity: 0.7 }}>algo →</span>
-            {srv.icon} {srv.label}
-          </div>
-        )} */}
         <div
           style={{
             fontSize: 14,
@@ -74,7 +36,7 @@ export const TopBar = ({ step, dark, setDark }) => {
             padding: "3px 10px",
           }}
         >
-          {step + 1} / 5
+          {view === "history" ? "History Overview" : `Step ${step + 1} / 4`}
         </div>
         <button
           className="app-btn"

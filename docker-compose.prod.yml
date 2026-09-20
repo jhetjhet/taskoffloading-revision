@@ -1,47 +1,55 @@
+# =============================================================================
+# Standalone Production Docker Compose for Task Offloading System
+# This file is completely self-contained and requires NO source code.
+# Usage:
+#   docker compose -f docker-compose.prod.yml --profile setup run --rm seed
+#   docker compose -f docker-compose.prod.yml up -d
+# =============================================================================
+
 services:
   postgres:
     image: postgres:16-alpine
+    restart: always
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-taskoffloading}
       POSTGRES_USER: ${POSTGRES_USER:-taskoffloading}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-taskoffloading}
     volumes:
       - postgres-data:/var/lib/postgresql/data
-      - ./simulation_backend/db/schema.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 5s
       timeout: 3s
       retries: 10
-    networks: [taskoffloading-net]
+    networks:
+      - taskoffloading-net
 
   redis:
     image: redis:7-alpine
+    restart: always
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 10
-    networks: [taskoffloading-net]
+    networks:
+      - taskoffloading-net
 
   seed:
-    image: taskoffloading-simulation-api
-    build:
-      context: ./simulation_backend
-      dockerfile: Dockerfile
+    image: snits/taskoffloading-simulation-api:latest
     command: ["python", "-m", "simulation_backend.seed"]
     profiles: ["setup"]
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-taskoffloading}:${POSTGRES_PASSWORD:-taskoffloading}@postgres:5432/${POSTGRES_DB:-taskoffloading}
     depends_on:
-      postgres: { condition: service_healthy }
-    networks: [taskoffloading-net]
+      postgres:
+        condition: service_healthy
+    networks:
+      - taskoffloading-net
 
   simulation-api:
-    image: taskoffloading-simulation-api
-    build:
-      context: ./simulation_backend
-      dockerfile: Dockerfile
+    image: snits/taskoffloading-simulation-api:latest
+    restart: always
     ports:
       - "${SIMULATION_API_PORT:-8000}:8000"
     environment:
@@ -49,18 +57,21 @@ services:
       REDIS_URL: redis://redis:6379/0
       SIMULATION_RUN_TIMEOUT_SEC: ${SIMULATION_RUN_TIMEOUT_SEC:-3600}
     depends_on:
-      postgres: { condition: service_healthy }
-      redis: { condition: service_healthy }
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health')"]
       interval: 10s
       timeout: 5s
       retries: 3
-    networks: [taskoffloading-net]
+    networks:
+      - taskoffloading-net
 
   gbfs-edge:
-    image: taskoffloading-simulation-worker
-    build: { context: ./simulation_backend, dockerfile: Dockerfile }
+    image: snits/taskoffloading-simulation-worker:latest
+    restart: always
     command: ["python", "-m", "simulation_backend.worker"]
     environment:
       REDIS_URL: redis://redis:6379/0
@@ -68,12 +79,15 @@ services:
       SIMULATION_TIME_SCALE: ${SIMULATION_TIME_SCALE:-0.05}
       SIMULATION_EVENT_DELAY_SEC: ${SIMULATION_EVENT_DELAY_SEC:-0.02}
       SIMULATION_EXECUTION_TICK_SEC: ${SIMULATION_EXECUTION_TICK_SEC:-0.01}
-    depends_on: { redis: { condition: service_healthy } }
-    networks: [taskoffloading-net]
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - taskoffloading-net
 
   gbfs-cloud:
-    image: taskoffloading-simulation-worker
-    build: { context: ./simulation_backend, dockerfile: Dockerfile }
+    image: snits/taskoffloading-simulation-worker:latest
+    restart: always
     command: ["python", "-m", "simulation_backend.worker"]
     environment:
       REDIS_URL: redis://redis:6379/0
@@ -81,12 +95,15 @@ services:
       SIMULATION_TIME_SCALE: ${SIMULATION_TIME_SCALE:-0.05}
       SIMULATION_EVENT_DELAY_SEC: ${SIMULATION_EVENT_DELAY_SEC:-0.02}
       SIMULATION_EXECUTION_TICK_SEC: ${SIMULATION_EXECUTION_TICK_SEC:-0.01}
-    depends_on: { redis: { condition: service_healthy } }
-    networks: [taskoffloading-net]
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - taskoffloading-net
 
   pso-edge:
-    image: taskoffloading-simulation-worker
-    build: { context: ./simulation_backend, dockerfile: Dockerfile }
+    image: snits/taskoffloading-simulation-worker:latest
+    restart: always
     command: ["python", "-m", "simulation_backend.worker"]
     environment:
       REDIS_URL: redis://redis:6379/0
@@ -94,12 +111,15 @@ services:
       SIMULATION_TIME_SCALE: ${SIMULATION_TIME_SCALE:-0.05}
       SIMULATION_EVENT_DELAY_SEC: ${SIMULATION_EVENT_DELAY_SEC:-0.02}
       SIMULATION_EXECUTION_TICK_SEC: ${SIMULATION_EXECUTION_TICK_SEC:-0.01}
-    depends_on: { redis: { condition: service_healthy } }
-    networks: [taskoffloading-net]
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - taskoffloading-net
 
   pso-cloud:
-    image: taskoffloading-simulation-worker
-    build: { context: ./simulation_backend, dockerfile: Dockerfile }
+    image: snits/taskoffloading-simulation-worker:latest
+    restart: always
     command: ["python", "-m", "simulation_backend.worker"]
     environment:
       REDIS_URL: redis://redis:6379/0
@@ -107,21 +127,21 @@ services:
       SIMULATION_TIME_SCALE: ${SIMULATION_TIME_SCALE:-0.05}
       SIMULATION_EVENT_DELAY_SEC: ${SIMULATION_EVENT_DELAY_SEC:-0.02}
       SIMULATION_EXECUTION_TICK_SEC: ${SIMULATION_EXECUTION_TICK_SEC:-0.01}
-    depends_on: { redis: { condition: service_healthy } }
-    networks: [taskoffloading-net]
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - taskoffloading-net
 
   frontend:
-    image: taskoffloading-frontend
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
+    image: snits/taskoffloading-frontend:latest
+    restart: always
     container_name: taskoffloading-frontend
     ports:
       - "${FRONTEND_PORT:-5173}:80"
     depends_on:
       simulation-api:
         condition: service_healthy
-    restart: unless-stopped
     networks:
       - taskoffloading-net
     healthcheck:

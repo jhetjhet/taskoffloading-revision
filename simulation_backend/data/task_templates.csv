@@ -1,16 +1,16 @@
 id,source_machine_id,task_name,payload_size_mb,processing_duration_sec,cpu_demand_percent,ram_demand_mb,max_tolerable_latency_sec
-CPCM1-LOW,CPCM1,Hole and Slot Cutting,10,70,58,120,90
-CPCM1-MID,CPCM1,Plate Profiling,15,95,68,160,120
-CPCM1-HIGH,CPCM1,Metal Sheet Cutting,20,120,85,230,150
-PCM1-LOW,PCM1,Plate Trimming,8,65,55,110,85
-PCM1-MID,PCM1,Shape Cutting,12,82,65,150,110
-PCM1-HIGH,PCM1,Metal Plate Cutting,18,100,80,210,130
-PB2-LOW,PB2,Metal Bracket Painting,10,90,52,130,115
-PB2-MID,PB2,Chassis Frame Painting,18,145,65,190,175
-PB2-HIGH,PB2,Metal Panel Spray Painting,25,210,90,300,250
-WM1-LOW,WM1,Panel Frame Welding,9,65,52,125,85
-WM1-MID,WM1,Bracket Joint Welding,14,95,62,175,120
-WM1-HIGH,WM1,Chassis Frame Welding,22,150,90,260,185
-SM3-LOW,SM3,Metal Strip Cutting,7,50,48,100,70
-SM3-MID,SM3,Sheet Blank Cutting,11,68,60,145,95
-SM3-HIGH,SM3,Metal Sheet Shearing,16,95,78,205,120
+CPCM1-01,CPCM1,Hole and Slot Cutting,8,22,38,120,32
+CPCM1-02,CPCM1,Plate Profiling,18,30,67,240,45
+CPCM1-03,CPCM1,Metal Sheet Cutting,32,39,94,420,55
+PCM1-01,PCM1,Plate Trimming,6,21,35,100,30
+PCM1-02,PCM1,Shape Cutting,16,28,62,220,42
+PCM1-03,PCM1,Metal Plate Cutting,28,37,88,390,52
+PB2-01,PB2,Metal Bracket Painting,12,24,45,180,35
+PB2-02,PB2,Chassis Frame Painting,24,32,72,340,48
+PB2-03,PB2,Metal Panel Spray Painting,40,40,96,480,60
+WM1-01,WM1,Panel Frame Welding,10,23,42,150,34
+WM1-02,WM1,Bracket Joint Welding,20,29,69,280,43
+WM1-03,WM1,Chassis Frame Welding,35,38,92,450,56
+SM3-01,SM3,Metal Strip Cutting,5,20,32,90,28
+SM3-02,SM3,Sheet Blank Cutting,14,27,58,210,40
+SM3-03,SM3,Metal Sheet Shearing,30,36,86,370,50

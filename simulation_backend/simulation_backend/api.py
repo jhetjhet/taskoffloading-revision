@@ -92,8 +92,9 @@ async def _resolve_tasks(request: RunRequest) -> list[Task]:
             raise HTTPException(status_code=409, detail="no task templates found; run the seed service")
         return [_record_to_task(row) for row in rows]
 
-    if len(request.tasks) > 15:
-        raise HTTPException(status_code=422, detail="a run accepts at most 15 tasks")
+    max_batch = int(os.environ.get("MAX_BATCH_SIZE", "15"))
+    if len(request.tasks) > max_batch:
+        raise HTTPException(status_code=422, detail=f"a run accepts at most {max_batch} tasks")
     return [task.to_domain() for task in request.tasks]
 
 

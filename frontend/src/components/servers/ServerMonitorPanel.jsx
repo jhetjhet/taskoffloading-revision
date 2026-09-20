@@ -99,7 +99,7 @@ const CollapseToggle = ({ open, onToggle, totalServers, busyCount }) => {
 ───────────────────────────────────────────────────────────── */
 export const ServerMonitorPanel = ({ liveUsage = {} }) => {
   const T = useT();
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(true);
   const [servers, setServers] = useState([]);
   const [error, setError] = useState("");
 

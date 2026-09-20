@@ -28,54 +28,81 @@ def _single_task_feasible(task: Task, profile: ServerProfile) -> bool:
 def compute_gbfs(
     tasks: list[Task], profiles: Mapping[ServerId, ServerProfile], tick_sec: float = 0.01
 ) -> AllocationResult:
-    """Allocate in input order using immediate network cost, never future batch balance."""
+    """Sequential greedy allocation considering immediate transfer, queue backlog, and capacity constraints."""
     allocation: list[ServerId] = []
     telemetry: list[dict] = []
 
+    # Running load state across the batch for each server
+    server_ram_used: dict[ServerId, float] = {s_id: 0.0 for s_id in profiles}
+    server_storage_used: dict[ServerId, float] = {s_id: 0.0 for s_id in profiles}
+    server_busy_time_sec: dict[ServerId, float] = {s_id: 0.0 for s_id in profiles}
+
     for task_idx, task in enumerate(tasks):
-        feasible = [
-            profile
-            for profile in profiles.values()
-            if _single_task_feasible(task, profile)
-        ]
         candidates = {}
+        feasible_servers: list[ServerId] = []
+
         for s_id, profile in profiles.items():
-            is_feas = _single_task_feasible(task, profile)
+            single_fit = _single_task_feasible(task, profile)
+            ram_fit = (server_ram_used[s_id] + task.ram_demand_mb) <= profile.max_ram_mb
+            storage_fit = (server_storage_used[s_id] + task.payload_size_mb) <= profile.storage_mb
+            is_feas = single_fit and ram_fit and storage_fit
+
             trans_ms = round((task.payload_size_mb / profile.bandwidth_mb_s) * 1000, 2)
             net_ms = round(profile.network_latency_ms, 2)
             proc_ms = round((task.processing_duration_sec / profile.processing_speed) * 1000, 2)
-            est_latency = round(net_ms + trans_ms + proc_ms, 2)
-            score = round((net_ms / 1000 + task.payload_size_mb / profile.bandwidth_mb_s) * 1000 + (proc_ms * 0.5), 2)
-            res_avail = round((1.0 - (task.ram_demand_mb / profile.max_ram_mb)) * 100, 1) if is_feas else 0.0
+            queue_est_ms = round(server_busy_time_sec[s_id] * 1000, 2)
+
+            # Combined estimated latency: Network RTT + Transmission + Queued Backlog + CPU Execution
+            est_latency = round(net_ms + trans_ms + queue_est_ms + proc_ms, 2)
+            score = round(net_ms + trans_ms + (queue_est_ms * 0.8) + (proc_ms * 0.5), 2)
+            res_avail = round(max(0.0, (1.0 - ((server_ram_used[s_id] + task.ram_demand_mb) / profile.max_ram_mb)) * 100), 1) if single_fit else 0.0
+
             candidates[s_id.value] = {
                 "server_id": s_id.value,
                 "label": "Edge Server A" if s_id == ServerId.EDGE else "Cloud Server B",
                 "latency_ms": est_latency,
                 "proc_time_ms": proc_ms,
-                "resource_avail": max(0.0, res_avail),
+                "queue_est_ms": queue_est_ms,
+                "resource_avail": res_avail,
                 "heuristic_score": score,
                 "feasible": is_feas,
             }
 
-        if not feasible:
-            selected_server = ServerId.CLOUD
-            reason = "Task requirements exceeded Edge limits; fell back to Cloud."
-        else:
-            selected = min(
-                feasible,
-                key=lambda profile: (
-                    profile.network_latency_ms / 1000 + task.payload_size_mb / profile.bandwidth_mb_s,
-                    task.processing_duration_sec / profile.processing_speed,
-                    profile.server_id,
-                ),
-            )
-            selected_server = selected.server_id
-            if selected_server == ServerId.EDGE:
-                reason = f"Edge selected with lower heuristic score ({candidates[ServerId.EDGE.value]['heuristic_score']}) and network latency."
-            else:
-                reason = f"Cloud selected with faster processing capability ({candidates[ServerId.CLOUD.value]['heuristic_score']})."
+            if is_feas:
+                feasible_servers.append(s_id)
 
+        if not feasible_servers:
+            # If both exceed soft batch limits, pick Cloud (highest hardware capacity)
+            selected_server = ServerId.CLOUD
+            reason = "Edge capacity limit reached (RAM/Storage/Queue); allocated to Cloud Server B."
+        else:
+            # Greedy choice: minimize total heuristic score (considering latency, backlog, and speed)
+            selected_server = min(
+                feasible_servers,
+                key=lambda s_id: candidates[s_id.value]["heuristic_score"],
+            )
+            if selected_server == ServerId.EDGE:
+                edge_score = candidates[ServerId.EDGE.value]["heuristic_score"]
+                reason = f"Edge selected with lower heuristic score ({edge_score}) and immediate network response."
+            else:
+                cloud_score = candidates[ServerId.CLOUD.value]["heuristic_score"]
+                edge_queue = candidates.get(ServerId.EDGE.value, {}).get("queue_est_ms", 0)
+                if edge_queue > 0:
+                    reason = f"Cloud selected ({cloud_score}) to avoid Edge queue backlog ({edge_queue} ms)."
+                else:
+                    reason = f"Cloud selected with faster processing capability ({cloud_score})."
+
+        # Update running server state
         allocation.append(selected_server)
+        server_ram_used[selected_server] += task.ram_demand_mb
+        server_storage_used[selected_server] += task.payload_size_mb
+        # Accumulate execution time scaled by cores
+        profile_selected = profiles[selected_server]
+        task_exec_sec = task.processing_duration_sec / profile_selected.processing_speed
+        server_busy_time_sec[selected_server] = max(
+            0.0, server_busy_time_sec[selected_server] + (task_exec_sec / max(1, profile_selected.cpu_cores)) - 0.2
+        )
+
         telemetry.append({
             "task_index": task_idx,
             "task_id": task.task_id,

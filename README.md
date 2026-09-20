@@ -1,360 +1,358 @@
 # Industrial IoT Edge-Cloud Task Offloading Simulation System
 
-## Current Backend Setup
-
-The active backend is [simulation_backend](simulation_backend), not the legacy `Backend/` folder. It uses local PostgreSQL for machine/task templates and run history, Redis for internal worker commands/events, Socket.IO for frontend events, and four isolated workers: GBFS Edge, GBFS Cloud, PSO Edge, and PSO Cloud.
-
-### Start and Seed
-
-```bash
-cp .env.example .env
-
-docker compose up -d postgres redis
-docker compose --profile setup run --rm --build seed
-docker compose up -d --build simulation-api gbfs-edge gbfs-cloud pso-edge pso-cloud
-```
-
-The seed command is repeatable. It upserts 5 machines and 15 task templates from [simulation_backend/data](simulation_backend/data). Start the frontend after the API is healthy:
-
-```bash
-docker compose up -d --build frontend
-```
-
-The API is available at `http://localhost:8000`.
-
-### Frontend API Contract
-
-- `GET /api/v1/health` checks API, PostgreSQL, and Redis health.
-- `GET /api/v1/machines` returns the seeded machine catalog with `id`, `name`, and nullable `image` URL fields.
-- `GET /api/v1/task-templates` returns all 15 task templates.
-- `GET /api/v1/servers` returns the available server list with latency/capability metadata.
-- `GET /api/v1/servers/ping/{server_id}` pings a server and returns its measured latency profile.
-- `GET /api/v1/workloads/{machine_id}` returns the task templates for one machine so the frontend can batch them into a custom low/mid/high simulation.
-- `POST /api/v1/runs` accepts a custom `tasks` array or a machine-based batch and returns a `202` response containing `run_id`.
-- `GET /api/v1/runs/{run_id}` returns persisted input, GBFS/PSO allocations, and per-task timings/statuses.
-- `GET /api/v1/runs` returns recent run history.
-
-Socket.IO clients connect to the API origin and emit `join_run` with `{ "run_id": "..." }`. The backend emits `run`, `algorithm`, `task`, `server_usage`, `run_complete`, and `run_failed`.
-
-Task lifecycle events are emitted for each task on its assigned algorithm/server pair and follow this status flow:
-
-```json
-{
-   "event": "task",
-   "run_id": "<uuid>",
-   "algorithm": "GBFS",
-   "server": "GBFS:SERVER_A",
-   "task_id": "TSK-1042",
-   "status": "TRANSFERRING"
-}
-```
-
-Later task events resolve to `FINISHED` or `FAILED`, and include the same `run_id`, `algorithm`, `server`, and `task_id`, plus `error_message` when the task misses its SLA or cannot fit the server profile.
-
-Server usage snapshots are emitted as a summary of the currently active load on each of the four simulated workers after every task lifecycle transition. The frontend can use them to update utilization bars and status chips in real time:
-
-```json
-{
-   "event": "server_usage",
-   "run_id": "<uuid>",
-   "server_id": "GBFS:SERVER_A",
-   "algorithm": "GBFS",
-   "placement": "EDGE",
-   "status": "BUSY",
-   "tasks_in_flight": 6,
-   "queue_depth": 2,
-   "running_tasks": 3,
-   "finished_tasks": 4,
-   "failed_tasks": 1,
-   "cpu_utilization_percent": 42.86,
-   "memory_utilization_percent": 66.67,
-   "storage_utilization_percent": 31.25,
-   "simulated_time_sec": 1.234
-}
-```
-
-Task statuses are emitted in simulator order as `TRANSFERRING`, `IN_QUEUE`, `RUNNING`, and then `FINISHED` or `FAILED`. Server usage values are calculated from active transfers, queue depth, running CPU demand, reserved RAM, and queue storage; they are not frontend estimates.
-
-The API uses `SIMULATION_FORECAST_TICK_SEC` (default `0.1`) for GBFS/PSO planning so PSO forecasting does not leave the UI in `PENDING` for the whole optimization search. Workers use `SIMULATION_EXECUTION_TICK_SEC` (default `0.01`) for detailed transfer, queue, and execution simulation. `SIMULATION_TIME_SCALE` (default `0.05`) controls visible wall-clock pacing: one simulated second takes 0.05 wall-clock seconds. Therefore a task with 120 seconds of processing work on a 1.0x server remains visibly `RUNNING` for about 6 seconds, while the same task on a 2.5x server runs for about 2.4 seconds. `SIMULATION_EVENT_DELAY_SEC` (default `0.02`) remains the minimum gap between visible events. `SIMULATION_RUN_TIMEOUT_SEC` (default `3600`) controls the API watchdog, allowing real-time runs with `SIMULATION_TIME_SCALE=1` to finish instead of being marked failed after 120 seconds. These settings affect only wall-clock delivery speed; recorded simulated timings remain unchanged.
-
-The live server IDs are exactly:
-
-- `GBFS:SERVER_A`
-- `GBFS:SERVER_B`
-- `PSO:SERVER_A`
-- `PSO:SERVER_B`
-
-An experimental research and simulation platform designed to evaluate and optimize task offloading decisions in Industrial Internet of Things (IIoT) smart manufacturing environments. The system evaluates task distribution between localized **Edge Servers** and centralized **Cloud Servers** using two core algorithms: **Greedy Best-First Search (GBFS)** and **Particle Swarm Optimization (PSO)**.
+A distributed research and simulation platform designed to evaluate and optimize task offloading decisions in Industrial Internet of Things (IIoT) smart manufacturing environments. The platform compares sequential greedy heuristic decisions (**Greedy Best-First Search — GBFS**) against combinatorial swarm optimization (**Binary Particle Swarm Optimization — PSO**) across distributed virtual **Edge** and **Cloud** servers.
 
 ---
 
-## 1. System Purpose and Function
+## 1. System Architecture
 
-In smart factories, industrial machinery (such as CNC plasma cutters, arc welders, paint booths, and shearing machines) generates workloads with differing resource demands—such as latency sensitivity, computational intensity, and energy constraints.
-
-This platform solves the task offloading problem by:
-- Modeling physics-based execution metrics (transmission delay, propagation latency, queuing delay, processor speed, and power consumption).
-- Simulating dynamic task batches generated from industrial machine profiles and workload tiers.
-- Comparing sequential greedy decisions (**GBFS**) against combinatorial multi-particle global optimization (**Binary PSO**).
-- Providing multi-tiered visual evaluation through a **React Web Dashboard**, a **Tkinter Desktop GUI Simulator**, and **Multi-Node REST Backends** backed by Supabase / PostgreSQL.
-
----
-
-## 2. System Architecture
+The simulation environment runs as a multi-container microservice system orchestrated via Docker Compose:
 
 ```
-                                  ┌───────────────────────────────┐
-                                  │   Industrial IoT Machinery    │
-                                  │ (Plasma, Welding, Paint, etc) │
-                                  └──────────────┬────────────────┘
-                                                 │
-                                                 ▼
-                        ┌──────────────────────────────────────────────────┐
-                        │            Simulation & Decision Engine          │
-                        │  - Task Batch Generator (Workload Tiers)         │
-                        │  - GBFS Heuristic Evaluator                      │
-                        │  - Binary PSO Swarm Optimizer                    │
-                        └──────────────┬───────────────────┬───────────────┘
-                                       │                   │
-                     ┌─────────────────┴──┐             ┌──┴─────────────────┐
-                     ▼                    ▼             ▼                    ▼
-             ┌──────────────┐     ┌──────────────┐┌──────────────┐    ┌──────────────┐
-             │Edge Server A │     │Cloud Server B││React Web UI  │    │Tkinter GUI   │
-             │(Low Latency) │     │(High Compute)││(Recharts)    │    │(Matplotlib)  │
-             └───────┬──────┘     └──────┬───────┘└──────────────┘    └──────────────┘
-                     │                   │
-                     └─────────┬─────────┘
-                               ▼
-                   ┌────────────────────────┐
-                   │  Supabase / PostgreSQL │
-                   │ (machines, logs)       │
-                   └────────────────────────┘
+                                 +-------------------------------+
+                                 |       React SPA Frontend      |
+                                 |   (Vite, Recharts, Nginx)     |
+                                 +---------------+---------------+
+                                                 | HTTP / WebSocket (:8000)
+                                                 v
+                                 +-------------------------------+
+                                 |    FastAPI Simulation API     |
+                                 |   - REST API Endpoints        |
+                                 |   - Socket.IO Event Server    |
+                                 |   - GBFS & PSO Planning       |
+                                 +-------+---------------+-------+
+                                         |               |
+                   Redis Pub/Sub Commands|               | PostgreSQL (asyncpg)
+                                         v               v
+                        +------------------+   +--------------------+
+                        │   Redis (7.0)    │   │ PostgreSQL (v16)   │
+                        │ - Event bridge   │   │ - Machines catalog │
+                        │ - Worker Pub/Sub │   │ - Task templates   │
+                        +--------+---------+   │ - Runs & analytics │
+                                 |             +--------------------+
+         +-----------------------+-----------------------+-----------------------+
+         |                       |                       |                       |
+         v                       v                       v                       v
++-----------------+     +-----------------+     +-----------------+     +-----------------+
+|    gbfs-edge    |     |   gbfs-cloud    |     |    pso-edge     |     |    pso-cloud    |
+|  (GBFS:SERVER_A)|     |  (GBFS:SERVER_B)|     |  (PSO:SERVER_A) |     |  (PSO:SERVER_B) |
++-----------------+     +-----------------+     +-----------------+     +-----------------+
 ```
 
-The system is implemented across three core components:
-
-1. **Web Dashboard (`frontend/`)**: React 19 + Vite single-page application featuring a multi-step offloading wizard, interactive timeline, live Recharts visual analytics (Gantt timeline, radar charts, win tally, bubble charts, efficiency donuts), and history tracking.
-2. **Distributed Backends (`Backend/` and root `app.py`)**:
-   - **Root `app.py`**: Direct PostgreSQL connection via `psycopg2`, managing schema setup, machine seeding, and offloading logs.
-   - **`Backend/app.py` (Server A)**: Represents **Edge Server A** (latency-sensitive, compute-heavy edge node), deployed with Supabase REST API integration.
-   - **`Backend/server_b/app.py` (Server B)**: Represents **Cloud Server B** (energy-efficient, cloud-hosted node), applying energy-optimized coefficients.
-   - **`Backend/server.js`**: Node.js / Express alternative API connecting via `@supabase/supabase-js`.
-3. **Desktop Simulator (`iot_task_offloading/`)**: Standalone Python Tkinter desktop application featuring physical cutting parameter matrices, live embedded Matplotlib graphs, server simulator tiers, and execution logging.
-
----
-
-## 3. Core Algorithms & Offloading Logic
-
-### Physics & Performance Formulation
-Offloading candidates are evaluated using real system constraints:
-- **Edge Server A**: Processing speed $P_{Edge} = 20\text{ MB/s}$, Network latency $N_{Edge} = 0.05\text{ s}$ ($50\text{ ms}$), Capacity $C_{Edge} = 500\text{ MB}$, Energy coefficient $= 0.08$.
-- **Cloud Server B**: Processing speed $P_{Cloud} = 50\text{ MB/s}$, Network latency $N_{Cloud} = 0.12\text{ s}$ ($120\text{ ms}$), Capacity $C_{Cloud} = 2000\text{ MB}$, Energy coefficient $= 0.03$.
-- **Bandwidth**: Shared transmission bandwidth $= 100\text{ MB/s}$.
-- **Theoretical Decision Boundary**: Derived from:
-  $$\frac{S}{20} + \frac{S}{100} + 0.05 = \frac{S}{50} + \frac{S}{100} + 0.12 \implies S = 2.33\text{ MB}$$
-- **Total Latency Formulation**:
-  $$T_{total} = T_{proc} + T_{trans} + T_{net} + T_{queue}$$
-  where:
-  $$T_{proc} = \frac{\text{TaskSize}}{\text{Speed}} \times 1000\text{ ms}$$
-  $$T_{trans} = \frac{\text{TaskSize}}{\text{Bandwidth}} \times 1000\text{ ms}$$
-  $$T_{net} = \text{NetworkLatency} \times 1000\text{ ms}$$
-  $$T_{queue} = \text{QueueLength} \times 2 + \text{Utilization} \times 0.05$$
-
-### Greedy Best-First Search (GBFS)
-- Sequentially steps through tasks in a batch.
-- For each task, evaluates Edge vs. Cloud placement based on the server's **running cumulative load** and capacity bounds.
-- Selects the feasible server that minimizes latency at each individual step.
-
-### Binary Particle Swarm Optimization (PSO)
-- Evaluates the task batch globally across a discrete search space of $2^N$ allocation vectors.
-- Each particle's position represents a binary assignment vector ($0 = \text{Edge}$, $1 = \text{Cloud}$).
-- Updates particle velocity and position using cognitive ($c_1 = 1.5$) and social ($c_2 = 1.5$) acceleration constants with inertia weight ($w = 0.7$) and maximum velocity clamping ($v_{max} = 0.5$).
-- Uses a sigmoid transfer function to sample binary positions and a seeded pseudo-random number generator (`SeededRandom`) for reproducible convergence.
-- Fitness is calculated to minimize average batch latency normalized against edge/cloud extremes.
+### Core Components
+1. **Frontend (`frontend/`)**: React 19 single-page application served via Nginx. Features:
+   - **Simulation History**: Landing dashboard with aggregated metrics, run logs, and report views.
+   - **4-Step Wizard**: Machine selection -> Workload/Batch builder -> Live Offload Execution -> Reports.
+   - **Real-Time Visualizations**: Live Gantt timeline, GBFS decision step traces, PSO particle swarm tracks, live server resource bars, radar profile charts, and tradeoff scatter charts.
+2. **Simulation API (`simulation_backend/`)**: FastAPI application providing REST routes, Socket.IO rooms, and telemetry broadcasting.
+3. **Database (`PostgreSQL 16`)**: Stores registered machines, task templates, simulation run records, and task telemetry logs.
+4. **Message Broker (`Redis 7`)**: Bridges command queues and event streams between the simulation API and worker containers.
+5. **Worker Nodes (4 Dedicated Containers)**:
+   - `gbfs-edge` (`GBFS:SERVER_A`): Simulates edge processing for GBFS-assigned tasks.
+   - `gbfs-cloud` (`GBFS:SERVER_B`): Simulates cloud processing for GBFS-assigned tasks.
+   - `pso-edge` (`PSO:SERVER_A`): Simulates edge processing for PSO-assigned tasks.
+   - `pso-cloud` (`PSO:SERVER_B`): Simulates cloud processing for PSO-assigned tasks.
 
 ---
 
-## 4. Custom Batch & Workload Profiles
+## 2. Server Specifications & Profiles
 
-Default machine profiles seeded in the database:
+Each server profile models physical compute constraints, network properties, and energy coefficients:
 
-| ID | Machine Code | Machine Name | Category | Default Task Type | Base Task Size | Base Latency |
-|---|---|---|---|---|---|---|
-| `M1` | `CPCM1` | CNC Plasma | Cutting Machines | Computation-Intensive | 50 MB | 88 ms |
-| `M2` | `PCM1` | Plasma Cutting | Cutting Machines | Computation-Intensive | 40 MB | 78 ms |
-| `M3` | `PB2` | Paint Booth | Finishing Machines | Energy-Efficient | 20 MB | 72 ms |
-| `M4` | `WM1` | Arc Welding | Welding Machines | Computation-Intensive | 30 MB | 92 ms |
-| `M5` | `SM3` | Shearing Machine | Cutting Machines | Latency-Sensitive | 25 MB | 85 ms |
-
-### Dynamic Workload Tiers
-Each machine supports predefined workload tiers:
-- **Low**: Reduced task sizes and queue lengths, testing performance under light workloads.
-- **Medium / Mid**: Balanced baseline industrial operational state.
-- **High**: Stress condition with high CPU utilization ($90\%$) and longer queues.
-- **Task Batching**: Synthesizes an 8-task batch per simulation run using fixed multiplier spreads ($0.55\times$ to $1.4\times$) to test allocation divergence.
+| Property | Edge Server A (`SERVER_A`) | Cloud Server B (`SERVER_B`) | Local Machine (`LOCAL_MACHINE`) | Description |
+| :--- | :--- | :--- | :--- | :--- |
+| **Network Latency (`N`)** | `50.0 ms` (`0.05 s`) | `120.0 ms` (`0.12 s`) | `0.0 ms` (`0.00 s`) | Base round-trip network transmission delay |
+| **Processing Speed (`P`)** | `1.0x` baseline | `2.5x` fast | `0.5x` slow | CPU compute multiplier factor |
+| **Max Memory (RAM)** | `500.0 MB` | `2000.0 MB` | `1000.0 MB` | Maximum active task memory capacity |
+| **Queue Storage Buffer** | `250.0 MB` | `1000.0 MB` | `500.0 MB` | Maximum payload buffer for pending queue |
+| **CPU Cores** | `2 cores` (`200%`) | `8 cores` (`800%`) | `2 cores` (`200%`) | Simultaneous execution capacity |
+| **Network Bandwidth (`B`)** | `100.0 MB/s` | `100.0 MB/s` | `1000.0 MB/s` | Shared network upload link bandwidth |
+| **Energy Coefficient** | `0.08` | `0.03` | `0.15` | Energy consumption multiplier per unit compute |
 
 ---
 
-## 5. API Reference
+## 3. Simulation Mechanics & Physics Formulation
 
-All backend variants implement the following REST endpoints:
+### 3.1 Network Transmission & Bandwidth Sharing
+Tasks assigned to a server share its network bandwidth equally:
+
+```text
+Current Speed (MB/s) = Bandwidth / Active_Transfers   (if Active_Transfers > 0, else 0)
+```
+
+For each simulation tick `delta_t`:
+
+```text
+Transferred Data (MB) = Current Speed * delta_t
+Remaining Payload = Remaining Payload - Transferred Data
+```
+
+### 3.2 Total Latency Formulation
+The end-to-end total latency `T_total` experienced by each task is:
+
+```text
+T_total = T_trans + T_queue + T_proc
+```
+
+where:
+- **`T_trans`**: Time required to complete data transmission over the shared network plus base network latency.
+- **`T_queue`**: Time spent waiting in the server RAM queue while CPU cores are busy.
+- **`T_proc`**: Actual compute time on the CPU:
+  ```text
+  T_proc = Task Processing Duration (sec) / Server Processing Speed
+  ```
+
+### 3.3 Failure Conditions
+A task will transition to `FAILED` status under any of the following constraints:
+1. **Hardware Capacity Deficit**:
+   - `Task RAM Demand > Server Max RAM`
+   - `Task CPU Demand > Server Max CPU Capacity`
+2. **Buffer Overflows**:
+   - `Active RAM Allocation + Task RAM > Server Max RAM`
+   - `Active Queue Storage + Task Payload > Server Storage Buffer`
+3. **SLA Deadline Breach (Service Level Agreement)**:
+   - If cumulative elapsed latency exceeds the task's maximum tolerable latency:
+     ```text
+     T_current + T_proc > Task Max Tolerable Latency (SLA)
+     ```
+
+---
+
+## 4. Algorithms: GBFS vs. Binary PSO
+
+### 4.1 Greedy Best-First Search (GBFS)
+
+GBFS processes tasks **sequentially in input order**, making an immediate greedy choice per task by tracking running server memory reservations, storage buffer occupancy, and estimated queue backlog.
+
+#### Feasibility Filter & Capacity Tracking
+For each task, candidate servers are checked against individual task constraints and cumulative batch occupancy:
+
+```text
+Feasible(Task, Server) = (Task_RAM <= Server_RAM) AND
+                         (Running_RAM + Task_RAM <= Server_RAM) AND
+                         (Running_Storage + Task_Payload <= Server_Storage) AND
+                         (Task_CPU <= Server_CPU)
+```
+
+#### Heuristic Scoring Function
+For feasible candidate servers, GBFS calculates an immediate heuristic cost combining round-trip network latency, payload transmission time, estimated queue backlog delay, and execution duration:
+
+```text
+Estimated Network Time (ms) = Network Latency + (Task Payload / Server Bandwidth * 1000)
+Estimated Execution Time (ms) = (Task Processing Duration / Server Processing Speed) * 1000
+Estimated Queue Backlog (ms) = Server Cumulative Busy Backlog (ms)
+
+Heuristic Score = Estimated Network Time + (0.8 * Estimated Queue Backlog) + (0.5 * Estimated Execution Time)
+```
+
+- **Decision Rule**:
+  ```text
+  Selected Server = argmin( Heuristic Score for Server in Feasible Servers )
+  ```
+- **Sequential Dynamic Behavior**:
+  - **Early Tasks**: With empty queues and available RAM, Edge Server A is greedily favored due to lower network latency (`50 ms` vs `120 ms`).
+  - **Mid to Late Tasks**: As Edge Server A accumulates queue backlog and reaches its 500 MB RAM or 250 MB storage buffer limit, the heuristic score for Edge increases significantly or Edge becomes infeasible. GBFS dynamically routes subsequent tasks to Cloud Server B (`2.5x` processing speed, `2000 MB` RAM, `8 cores`).
+
+---
+
+### 4.2 Binary Particle Swarm Optimization (Binary PSO)
+
+Binary PSO optimizes the **entire batch globally**, evaluating assignment combinations across a search space of `2^N` possible configurations.
+
+#### Representation
+- **Position Vector**: `X_i = (x_i1, x_i2, ..., x_iN)`, where:
+  - `x_id = 0` -> **Edge Server A**
+  - `x_id = 1` -> **Cloud Server B**
+- **Swarm Size**: `M = 12` particles.
+- **Iterations**: `T = 40` iterations.
+
+#### Velocity & Position Updates
+At iteration `t + 1`:
+
+```text
+v_id(t+1) = clamp( w * v_id(t) + c1 * r1 * (p_id - x_id(t)) + c2 * r2 * (g_d - x_id(t)), -v_max, v_max )
+
+Sigmoid Transfer Function:
+S(v_id(t+1)) = 1 / ( 1 + exp( -v_id(t+1) ) )
+
+Position Sampling:
+x_id(t+1) = 1 if rand() < S(v_id(t+1)) else 0
+```
+
+#### Hyperparameters
+| Parameter | Symbol | Value | Description |
+| :--- | :--- | :--- | :--- |
+| **Inertia Weight** | `w` | `0.7` | Balances exploration vs. exploitation |
+| **Cognitive Acceleration** | `c1` | `1.5` | Particle memory attraction |
+| **Social Acceleration** | `c2` | `1.5` | Swarm global best attraction |
+| **Velocity Clamp** | `v_max` | `4.0` | Prevents probability saturation |
+| **Random Seed** | `seed` | `12345` | Ensures deterministic, reproducible search results |
+
+#### Multi-Objective Lexicographical Fitness Function
+Each candidate allocation vector is simulated through the discrete-event simulator engine:
+
+```text
+Fitness(X) = ( Failed Count, SLA Breach Count, Total Completed Latency (s), Worst Task Latency (s) )
+```
+
+- **Priority 1**: Minimize total failed tasks (hard capacity violations).
+- **Priority 2**: Minimize SLA deadline breaches.
+- **Priority 3**: Minimize cumulative batch latency.
+- **Priority 4**: Minimize makespan / worst-case task latency.
+
+---
+
+## 5. REST API Documentation
+
+Base URL: `http://localhost:8000` (or `/api/v1` via frontend reverse proxy).
+
+### Endpoints Summary
 
 | Method | Endpoint | Description |
-|---|---|---|
-| `GET` | `/` | Root status and route index |
-| `GET` | `/health` | Server health check and Supabase connectivity status |
-| `GET` | `/api/health` | Node identification check (reports Server A or Server B) |
-| `GET` | `/api/setup` | Initializes PostgreSQL schema and seeds default machines |
-| `GET` | `/api/machines` | Returns dictionary of all registered IoT machines |
-| `GET` | `/api/machines/<id>/task-data` | Fetches operational metrics for a specific machine ID |
-| `POST` | `/api/gbfs` | Calculates estimated latency and metrics using GBFS |
-| `POST` | `/api/pso` | Calculates estimated latency and metrics using PSO |
-| `POST` | `/api/offload` | Commits an offload decision and logs execution to database |
-| `GET` | `/api/logs` | Retrieves the latest 50 offload execution records |
+| :--- | :--- | :--- |
+| `GET` | `/api/v1/health` | Service health check (verifies PostgreSQL & Redis connectivity) |
+| `GET` | `/api/v1/machines` | Returns catalog of registered IoT machines |
+| `GET` | `/api/v1/task-templates` | Returns all seeded task templates with demand attributes |
+| `GET` | `/api/v1/workloads/{machine_id}` | Retrieves task templates specific to a machine |
+| `GET` | `/api/v1/servers` | Returns active server node profiles and capabilities |
+| `GET` | `/api/v1/servers/ping/{server_id}` | Ping test returning server network latency |
+| `POST` | `/api/v1/runs` | Creates and queues a new simulation run (`202 Accepted`) |
+| `GET` | `/api/v1/runs` | Lists simulation run history (supports `?limit=50`) |
+| `GET` | `/api/v1/runs/{run_id}` | Retrieves execution results and algorithm allocations for a run |
+| `GET` | `/api/v1/runs/{run_id}/analytics` | Retrieves complete 6-section analytics report for a run |
 
 ---
 
-## 6. Project Directory Structure
+### Request & Response Schemas
 
+#### `POST /api/v1/runs`
+```json
+{
+  "seed": 12345,
+  "tasks": [
+    {
+      "task_id": "TSK-1001",
+      "task_name": "Plasma Contour Cutting",
+      "payload_size_mb": 12.5,
+      "processing_duration_sec": 3.2,
+      "cpu_demand_percent": 45.0,
+      "ram_demand_mb": 128.0,
+      "max_tolerable_latency_sec": 8.0,
+      "source_machine_id": "M1"
+    }
+  ]
+}
 ```
-.
-├── app.py                         # Root Flask backend (psycopg2 direct PostgreSQL connection)
-├── requirements.txt               # Dependencies for root Flask app
-├── README.md                      # System documentation
-├── Backend/
-│   ├── app.py                     # Flask backend - Server A (Edge Node, Supabase REST)
-│   ├── requirements.txt           # Python dependencies for Backend Server A
-│   ├── server.js                  # Node.js / Express backend alternative
-│   ├── supabase_client.py         # Supabase client initializer for Server A
-│   ├── algorithms/
-│   │   ├── gbfs.js                # Standalone JavaScript GBFS score calculation
-│   │   └── pso.js                 # Standalone JavaScript PSO score calculation
-│   └── server_b/
-│       ├── app.py                 # Flask backend - Server B (Cloud Node, energy-optimized)
-│       ├── requirements.txt       # Python dependencies for Backend Server B
-│       └── supabase_client.py     # Supabase client initializer for Server B
-├── frontend/
-│   ├── package.json               # Node dependencies (React 19, Vite, Recharts)
-│   ├── vite.config.js             # Vite configuration
-│   ├── index.html                 # HTML shell
-│   ├── src/
-│   │   ├── main.jsx               # React entry point
-│   │   ├── App.jsx                # Main web application (wizards, charts, simulation)
-│   │   ├── App.css / index.css    # Styling
-│   │   └── algorithms/
-│   │       ├── gbfs.js            # Frontend utility GBFS score function
-│   │       └── pso.js             # Frontend utility PSO score function
-│   └── public/images/             # Machine illustration assets
-└── iot_task_offloading/
-    ├── main.py                    # Tkinter desktop application entry point
-    ├── logs/
-    │   └── simulation.log         # Local execution text log
-    ├── algorithms/
-    │   ├── gbfs.py                # Python GBFS heuristic scoring logic
-    │   └── pso.py                 # Python PSO scoring logic with random convergence
-    ├── simulation/
-    │   └── server_simulator.py    # Edge/Fog/Cloud tier simulator
-    ├── monitoring/
-    │   └── performance_graphs.py  # Embedded Matplotlib multi-axis and pie charts
-    └── ui/
-        └── dashboard.py           # Tkinter dashboard layout, canvas, controls, and tables
+**Response (`202 Accepted`)**:
+```json
+{
+  "run_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+  "status": "QUEUED"
+}
 ```
+
+#### `GET /api/v1/runs/{run_id}/analytics`
+Returns structured report data containing:
+- `raw_performance`: Latency, processing time, throughput, CPU%, RAM, storage, queue depth.
+- `radar_comparison`: 5-dimensional normalized scores (Latency, Processing, Throughput, Energy, Utilization).
+- `baseline_improvement`: Percentage improvements compared to local execution baseline.
+- `tradeoffs`: Energy donut metrics, bubble chart points, and recommended server allocation.
+- `experiment_validation`: Predicted vs. actual measured latency with percentage deviation.
+- `research_conclusion`: Algorithm recommendation and summary conclusions.
 
 ---
 
-## 7. Setup & Execution Instructions
+## 6. Socket.IO Real-Time Event Protocol
 
-### Prerequisites
-- **Python**: 3.10+
-- **Node.js**: 18+ and npm
-- **PostgreSQL / Supabase**: An active Supabase project (for database logging)
+Clients connect to `/socket.io` and join a run room by emitting:
+```javascript
+socket.emit("join_run", { run_id: "<uuid>" });
+```
+
+### Server-Emitted Events
+
+| Event | Payload Key Fields | Description |
+| :--- | :--- | :--- |
+| `run` | `run_id`, `status` | Run status updates (`RUNNING`, `COMPLETED`, `FAILED`) |
+| `gbfs_decision_step` | `task_index`, `task_id`, `candidates`, `selected_server`, `decision_reason` | Emitted per task to visualize sequential heuristic reasoning |
+| `pso_decision_step` | `iteration`, `best_fitness`, `best_x`, `particles`, `global_allocation` | Emitted per PSO iteration to visualize swarm convergence |
+| `algorithm` | `run_id`, `algorithm`, `allocation`, `tasks` | Initial serialized allocation results |
+| `task` | `run_id`, `algorithm`, `server`, `task_id`, `status`, `error_message` | Real-time task lifecycle transitions (`TRANSFERRING` -> `IN_QUEUE` -> `RUNNING` -> `FINISHED`/`FAILED`) |
+| `server_usage` | `server_id`, `algorithm`, `placement`, `tasks_in_flight`, `cpu_utilization_percent`, `memory_utilization_percent` | Live server load and utilization snapshot |
+| `run_complete` | `run_id`, `status`, `analytics` | Emitted when simulation workers finish execution |
+| `run_failed` | `run_id`, `error` | Emitted if an unhandled error occurs |
 
 ---
 
-### Environment Variables
-For backends connecting to Supabase, configure:
-```bash
-export SUPABASE_URL="https://<your-project-id>.supabase.co"
-export SUPABASE_KEY="<your-anon-or-service-role-key>"
-```
+## 7. Machine & Workload Catalog
 
-For the root direct PostgreSQL backend (`app.py`):
-```bash
-export DB_HOST="db.<your-project-id>.supabase.co"
-export DB_NAME="postgres"
-export DB_USER="postgres"
-export DB_PASSWORD="<your-database-password>"
-export DB_PORT="5432"
-```
+The database is seeded from CSV templates (`simulation_backend/data/`):
 
----
+### Seeded Machines
+1. **`M1` (CNC Plasma Cutter)**: Heavy duty high-heat plasma cutting machine.
+2. **`M2` (Laser Cutting System)**: High precision CNC fiber laser cutter.
+3. **`M3` (Robotic Paint Booth)**: Automated industrial spray painting cell.
+4. **`M4` (Robotic Arc Welder)**: Multi-axis robotic welding arm.
+5. **`M5` (Hydraulic Shearing Machine)**: Heavy metal plate cutting and stamping.
 
-### Option A: Running with Docker Compose (Recommended)
-
-Run both the Backend (Edge Server A + Cloud Server B) and Frontend (React + Nginx) with a single command:
-
-```bash
-# Optional: create .env if configuring Supabase credentials
-cp .env.example .env
-
-# Build and start containers
-docker compose up --build
-```
-
-- **Frontend Dashboard**: `http://localhost:5173`
-- **Edge Server A API**: `http://localhost:5000`
-- **Cloud Server B API**: `http://localhost:5001`
-
-To stop the services:
-```bash
-docker compose down
-```
+### Workload Sizing Scheme
+- **Low**: Sized for `35%` edge server capacity footprint.
+- **Mid**: Sized for `65%` edge server capacity footprint.
+- **High**: Sized for `95%` edge server capacity footprint (stresses edge capacity, triggering cloud offloading).
+- **Custom Batch**: Manual selection and batch quantity configuration.
 
 ---
 
-### Option B: Running the React Web Application (Manual Local Setup)
+## 8. Deployment & Running Instructions
 
-1. **Start the Frontend**:
+### 8.1 Docker Compose Deployment (Recommended)
+
+1. **Configure Environment**:
    ```bash
-   cd frontend
-   npm install
-   npm run dev
-   ```
-   Open the printed URL (typically `http://localhost:5173`) in your browser.
-
-2. **Start Backend Server A (Local Edge Server)**:
-   ```bash
-   cd Backend
-   pip install -r requirements.txt
-   python app.py
-   ```
-   Runs on `http://localhost:5000` (or configured port).
-
-3. **Start Backend Server B (Local Cloud Server)**:
-   ```bash
-   cd Backend/server_b
-   pip install -r requirements.txt
-   python app.py
+   cp .env.example .env
    ```
 
-4. **Initialize Database Schema & Seeds**:
-   Send a GET request to the setup endpoint:
+2. **Start Database and Redis**:
    ```bash
-   curl http://localhost:5000/api/setup
+   docker compose up -d postgres redis
    ```
+
+3. **Run One-Time Database Seed**:
+   ```bash
+   docker compose --profile setup run --rm --build seed
+   ```
+
+4. **Start API and Simulation Workers**:
+   ```bash
+   docker compose up -d --build simulation-api gbfs-edge gbfs-cloud pso-edge pso-cloud
+   ```
+
+5. **Start Frontend Dashboard**:
+   ```bash
+   docker compose up -d --build frontend
+   ```
+
+- **Web Dashboard**: `http://localhost:5173`
+- **Simulation API**: `http://localhost:8000`
 
 ---
 
-### Option C: Running the Standalone Tkinter Desktop Simulator
+### 8.2 Local Development Setup
 
-The desktop simulation runs locally without requiring a browser:
-
+#### Backend Setup
 ```bash
-cd iot_task_offloading
-pip install matplotlib
-python main.py
+cd simulation_backend
+python -m venv venv
+source venv/bin/activate
+pip install -e .
+python -m simulation_backend.seed
+uvicorn simulation_backend.api:asgi_app --host 0.0.0.0 --port 8000 --reload
 ```
 
-Inside the application:
-1. Select the material type, thickness, and cutting current.
-2. Click **Generate & Offload Task** to run the physics matrix, execute GBFS and PSO evaluations, compare winning metrics, view live line and pie graphs, and log results.
+#### Frontend Setup
+```bash
+cd frontend
+npm install
+npm run dev
+```
+Open `http://localhost:5173` in your browser.

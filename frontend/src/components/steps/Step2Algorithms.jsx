@@ -75,7 +75,7 @@ const AlgorithmPanel = ({ algorithm, tasks, running, T }) => {
   );
 };
 
-export const Step2Algorithms = ({ machine, tasks = [], onServerUsage = () => {}, onReportReady = () => {} }) => {
+export const Step2Algorithms = ({ machine, tasks = [], onServerUsage = () => {}, onReportReady = () => {}, onRunStatusChange = () => {} }) => {
   const T = useT();
   const socketRef = useRef(null);
   const [runId, setRunId] = useState("");
@@ -110,6 +110,7 @@ export const Step2Algorithms = ({ machine, tasks = [], onServerUsage = () => {},
     socketRef.current?.disconnect();
     setError("");
     setRunStatus("QUEUED");
+    onRunStatusChange("QUEUED");
     setTaskOverrides({ GBFS: {}, PSO: {} });
     setGbfsDecisionStep(null);
     setGbfsAllSteps([]);
@@ -135,7 +136,11 @@ export const Step2Algorithms = ({ machine, tasks = [], onServerUsage = () => {},
       const socket = io(window.location.origin, { path: "/socket.io", transports: ["websocket", "polling"] });
       socketRef.current = socket;
       socket.on("connect", () => socket.emit("join_run", { run_id: data.run_id }));
-      socket.on("run", (event) => setRunStatus(event.status || "RUNNING"));
+      socket.on("run", (event) => {
+        const status = event.status || "RUNNING";
+        setRunStatus(status);
+        onRunStatusChange(status);
+      });
       socket.on("gbfs_decision_step", (event) => {
         setGbfsDecisionStep(event);
         setGbfsAllSteps((prev) => [...prev, event]);
@@ -164,6 +169,7 @@ export const Step2Algorithms = ({ machine, tasks = [], onServerUsage = () => {},
       });
       socket.on("run_complete", async (event) => {
         setRunStatus(event.status || "COMPLETED");
+        onRunStatusChange(event.status || "COMPLETED");
         try {
           const { data: report } = await simulationApi.get(`/runs/${data.run_id}`);
           const { data: analytics } = await simulationApi.get(`/runs/${data.run_id}/analytics`);
@@ -174,11 +180,13 @@ export const Step2Algorithms = ({ machine, tasks = [], onServerUsage = () => {},
       });
       socket.on("run_failed", (event) => {
         setRunStatus("FAILED");
+        onRunStatusChange("FAILED");
         setError(event.error || "The simulation failed.");
       });
       socket.on("connect_error", () => setError("Unable to connect to the live simulation stream."));
     } catch (requestError) {
       setRunStatus("FAILED");
+      onRunStatusChange("FAILED");
       setError(requestError.response?.data?.detail || "Unable to start the simulation.");
     }
   };
@@ -273,12 +281,15 @@ export const Step2Algorithms = ({ machine, tasks = [], onServerUsage = () => {},
             <GBFSExecutionPanel
               currentStep={gbfsDecisionStep}
               allSteps={gbfsAllSteps}
+              totalTasks={tasks.length}
+              tasks={tasks}
               isRunning={runStatus === "RUNNING"}
               machine={machine}
             />
             <PSOExecutionPanel
               currentStep={psoDecisionStep}
               allSteps={psoAllSteps}
+              totalTasks={tasks.length}
               isRunning={runStatus === "RUNNING"}
             />
           </div>

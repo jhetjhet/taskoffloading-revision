@@ -8,8 +8,9 @@ export const SIDEBAR_STEPS = [
   { id: "reports", label: "Reports" },
 ];
 
-export const Sidebar = ({ step, maxReached, onJump }) => {
+export const Sidebar = ({ view, step, maxReached, onSelectView, onJump }) => {
   const T = useT();
+  const isHistory = view === "history";
   
   return (
     <div
@@ -28,21 +29,6 @@ export const Sidebar = ({ step, maxReached, onJump }) => {
     >
       <div style={{ padding: "20px 20px 16px", borderBottom: `1px solid ${T.border}` }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <div
-            style={{
-              width: 32,
-              height: 32,
-              borderRadius: 6,
-              background: "linear-gradient(135deg, #2563eb, #059669)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              fontSize: 17,
-              flexShrink: 0,
-            }}
-          >
-            ⚡
-          </div>
           <div>
             <div
               style={{
@@ -63,6 +49,78 @@ export const Sidebar = ({ step, maxReached, onJump }) => {
       </div>
 
       <div style={{ padding: "16px 12px", flex: 1 }}>
+        <div style={{ marginBottom: 16 }}>
+          <button
+            onClick={() => onSelectView("history")}
+            className="app-btn"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              width: "100%",
+              padding: "9px 10px",
+              borderRadius: 6,
+              border: "none",
+              cursor: "pointer",
+              textAlign: "left",
+              background: isHistory ? T.elevated : "transparent",
+              outline: isHistory ? `1px solid ${T.border}` : "none",
+              transition: "background 0.12s ease, transform 0.12s ease",
+            }}
+            onMouseEnter={(e) => {
+              if (!isHistory) e.currentTarget.style.background = T.elevated;
+            }}
+            onMouseLeave={(e) => {
+              if (!isHistory) e.currentTarget.style.background = "transparent";
+            }}
+          >
+            <div
+              style={{
+                width: 22,
+                height: 22,
+                borderRadius: 4,
+                flexShrink: 0,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontSize: 12,
+                fontWeight: 700,
+                background: isHistory ? T.blue : T.elevated,
+                color: isHistory ? "#ffffff" : T.dim,
+                border: `1px solid ${isHistory ? T.blue : T.border}`,
+              }}
+            >
+              📜
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div
+                style={{
+                  fontSize: 14,
+                  fontWeight: isHistory ? 600 : 500,
+                  color: isHistory ? T.text : T.muted,
+                  fontFamily: T.fontSans,
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                }}
+              >
+                Simulation History
+              </div>
+            </div>
+            {isHistory && (
+              <div
+                style={{
+                  width: 3,
+                  height: 14,
+                  borderRadius: 2,
+                  background: T.blue,
+                  flexShrink: 0,
+                }}
+              />
+            )}
+          </button>
+        </div>
+
         <div
           style={{
             fontSize: 13,
@@ -79,7 +137,7 @@ export const Sidebar = ({ step, maxReached, onJump }) => {
         </div>
         
         {SIDEBAR_STEPS.map((item, i) => {
-          const active = i === step;
+          const active = !isHistory && i === step;
           const done = i < step;
           const clickable = i <= maxReached;
           
@@ -88,6 +146,7 @@ export const Sidebar = ({ step, maxReached, onJump }) => {
               key={item.id}
               onClick={() => clickable && onJump(i)}
               className={clickable ? "app-btn" : ""}
+              aria-disabled={!clickable}
               style={{
                 display: "flex",
                 alignItems: "center",

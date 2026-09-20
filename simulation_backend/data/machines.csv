@@ -1,6 +1,6 @@
 id,name,image
-CPCM1,CNC Plasma Cutting,
-PCM1,Plasma Cutting,
-PB2,Paint Booth,
-WM1,Arc Welding,
-SM3,Shearing Machine,
+CPCM1,CNC Plasma Cutting,/images/plasma.png
+PCM1,Plasma Cutting,/images/plasmacut.png
+PB2,Paint Booth,/images/paint.png
+WM1,Arc Welding,/images/welding.png
+SM3,Shearing Machine,/images/shearing.png
