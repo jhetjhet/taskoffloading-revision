@@ -22,10 +22,18 @@ export const AppShell = () => {
   const [report, setReport] = useState(null);
   const [runStatus, setRunStatus] = useState("READY");
 
-  const sameBatch = (current, next) => (
-    current.length === next.length
-    && current.every((task, index) => task.task_id === next[index]?.task_id)
-  );
+  const sameBatch = (current, next) => {
+    const fields = [
+      "task_id",
+      "payload_size_mb",
+      "processing_duration_sec",
+      "cpu_demand_percent",
+      "ram_demand_mb",
+      "max_tolerable_latency_sec",
+    ];
+    return current.length === next.length
+      && current.every((task, index) => fields.every((field) => task[field] === next[index]?.[field]));
+  };
 
   const handleMachineSelection = useCallback((selectedMachine, tasks) => {
     setMachine((current) => current?.id === selectedMachine?.id ? current : selectedMachine);

@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import { useT } from "../../context/ThemeContext";
 import { Badge, Card, GhostBtn, InfoBox, PrimaryBtn, Stat, TableRow, Th } from "../common";
 import { AnalyticsDashboard } from "../steps/reports/AnalyticsDashboard";
+import { ReportInterpretation } from "../steps/reports/ReportInterpretation";
 import { ReportSummary } from "../steps/reports/ReportSummary";
 import { ServerAllocationReport } from "../steps/reports/ServerAllocationReport";
 import { AlgorithmReportTable } from "../steps/reports/AlgorithmReportTable";
@@ -42,6 +43,9 @@ export const SimulationHistory = ({ onStartNewPipeline, onLoadRunToPipeline }) =
   const [runs, setRuns] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [page, setPage] = useState(1);
+  const [pagination, setPagination] = useState({ page: 1, page_size: 10, total: 0, total_pages: 0 });
+  const [statusCounts, setStatusCounts] = useState({});
 
   // Selected run for detailed view
   const [selectedRunId, setSelectedRunId] = useState(null);
@@ -49,16 +53,19 @@ export const SimulationHistory = ({ onStartNewPipeline, onLoadRunToPipeline }) =
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [detailError, setDetailError] = useState(null);
 
-  const fetchRuns = useCallback(async () => {
+  const fetchRuns = useCallback(async (requestedPage) => {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch("/api/v1/runs?limit=50");
+      const res = await fetch(`/api/v1/runs?page=${requestedPage}&page_size=10`);
       if (!res.ok) {
         throw new Error(`Failed to fetch runs (HTTP ${res.status})`);
       }
       const data = await res.json();
-      setRuns(data);
+      setRuns(data.runs || []);
+      setPagination(data.pagination || { page: requestedPage, page_size: 10, total: 0, total_pages: 0 });
+      setStatusCounts(data.status_counts || {});
+      setPage(data.pagination?.page || requestedPage);
     } catch (err) {
       setError(err.message || "Failed to load simulation runs");
     } finally {
@@ -67,8 +74,13 @@ export const SimulationHistory = ({ onStartNewPipeline, onLoadRunToPipeline }) =
   }, []);
 
   useEffect(() => {
-    fetchRuns();
+    fetchRuns(1);
   }, [fetchRuns]);
+
+  const handlePageChange = (nextPage) => {
+    if (loading || nextPage < 1 || (pagination.total_pages > 0 && nextPage > pagination.total_pages)) return;
+    fetchRuns(nextPage);
+  };
 
   const handleSelectRun = async (runId) => {
     if (selectedRunId === runId) {
@@ -113,10 +125,10 @@ export const SimulationHistory = ({ onStartNewPipeline, onLoadRunToPipeline }) =
   };
 
   // Compute aggregate stats
-  const totalRuns = runs.length;
-  const completedRuns = runs.filter((r) => r.status === "COMPLETED").length;
-  const failedRuns = runs.filter((r) => r.status === "FAILED").length;
-  const runningRuns = runs.filter((r) => r.status === "RUNNING" || r.status === "QUEUED").length;
+  const totalRuns = pagination.total;
+  const completedRuns = statusCounts.COMPLETED || 0;
+  const failedRuns = statusCounts.FAILED || 0;
+  const runningRuns = (statusCounts.RUNNING || 0) + (statusCounts.QUEUED || 0);
 
   return (
     <div style={{ maxWidth: 1200, margin: "0 auto", display: "grid", gap: 16 }}>
@@ -159,7 +171,7 @@ export const SimulationHistory = ({ onStartNewPipeline, onLoadRunToPipeline }) =
         </div>
 
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-          <GhostBtn onClick={fetchRuns} disabled={loading}>
+          <GhostBtn onClick={() => fetchRuns(page)} disabled={loading}>
             {loading ? "Refreshing..." : "↻ Refresh"}
           </GhostBtn>
           <PrimaryBtn onClick={onStartNewPipeline}>
@@ -227,6 +239,8 @@ export const SimulationHistory = ({ onStartNewPipeline, onLoadRunToPipeline }) =
                 <ReportSummary report={selectedRunData} />
               )}
 
+              <ReportInterpretation report={selectedRunData} T={T} />
+
               {selectedRunData.analytics ? (
                 <AnalyticsDashboard analytics={selectedRunData.analytics} T={T} />
               ) : (
@@ -275,15 +289,16 @@ export const SimulationHistory = ({ onStartNewPipeline, onLoadRunToPipeline }) =
             </PrimaryBtn>
           </div>
         ) : (
-          <div style={{ overflowX: "auto" }}>
-            <table
-              style={{
-                width: "100%",
-                minWidth: 720,
-                borderCollapse: "collapse",
-                textAlign: "left",
-              }}
-            >
+          <>
+            <div style={{ overflowX: "auto" }}>
+              <table
+                style={{
+                  width: "100%",
+                  minWidth: 720,
+                  borderCollapse: "collapse",
+                  textAlign: "left",
+                }}
+              >
               <thead>
                 <tr>
                   <Th>Status</Th>
@@ -349,8 +364,39 @@ export const SimulationHistory = ({ onStartNewPipeline, onLoadRunToPipeline }) =
                   );
                 })}
               </tbody>
-            </table>
-          </div>
+              </table>
+            </div>
+            {pagination.total_pages > 1 && (
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  gap: 12,
+                  flexWrap: "wrap",
+                  marginTop: 14,
+                }}
+              >
+                <span style={{ color: T.muted, fontSize: 13, fontFamily: T.fontMono }}>
+                  Page {pagination.page} of {pagination.total_pages} · {pagination.total} runs
+                </span>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <GhostBtn
+                    onClick={() => handlePageChange(pagination.page - 1)}
+                    disabled={loading || !pagination.has_previous}
+                  >
+                    Previous
+                  </GhostBtn>
+                  <GhostBtn
+                    onClick={() => handlePageChange(pagination.page + 1)}
+                    disabled={loading || !pagination.has_next}
+                  >
+                    Next
+                  </GhostBtn>
+                </div>
+              </div>
+            )}
+          </>
         )}
       </Card>
     </div>

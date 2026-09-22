@@ -10,10 +10,10 @@ from uuid import uuid4
 import asyncpg
 import redis.asyncio as redis
 import socketio
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from .algorithms import compute_binary_pso, compute_gbfs
+from .algorithms import compute_gbfs, compute_pso
 from .analytics import generate_analytics_report
 from .database import connect
 from .domain import CLOUD_PROFILE, EDGE_PROFILE, ServerId, Task, WorkerServerId
@@ -51,7 +51,7 @@ class TaskInput(BaseModel):
     task_id: str
     payload_size_mb: float = Field(gt=0)
     processing_duration_sec: float = Field(gt=0)
-    cpu_demand_percent: float = Field(gt=0, le=100)
+    cpu_demand_percent: float = Field(gt=0)
     ram_demand_mb: float = Field(gt=0)
     max_tolerable_latency_sec: float = Field(gt=0)
     source_machine_id: str = ""
@@ -270,7 +270,7 @@ async def get_run_analytics(run_id: str) -> dict:
     
     tasks = [Task(**t) for t in tasks_input]
     gbfs = await asyncio.to_thread(compute_gbfs, tasks, PROFILES)
-    pso = await asyncio.to_thread(compute_binary_pso, tasks, PROFILES)
+    pso = await asyncio.to_thread(compute_pso, tasks, PROFILES)
     
     actual_rows = await app.state.db.fetch(
         "SELECT algorithm, task_id, status, total_latency_sec, execution_time_sec FROM task_execution_results WHERE run_id = $1",
@@ -281,13 +281,33 @@ async def get_run_analytics(run_id: str) -> dict:
 
 
 @app.get("/api/v1/runs")
-async def history(limit: int = 50) -> list[dict]:
+async def history(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(10, ge=1, le=100),
+) -> dict[str, object]:
+    total = await app.state.db.fetchval("SELECT COUNT(*) FROM simulation_runs")
+    status_rows = await app.state.db.fetch(
+        "SELECT status, COUNT(*) AS count FROM simulation_runs GROUP BY status"
+    )
+    total_pages = (total + page_size - 1) // page_size
     rows = await app.state.db.fetch(
         "SELECT id, status, seed, created_at, completed_at FROM simulation_runs "
-        "ORDER BY created_at DESC LIMIT $1",
-        min(max(limit, 1), 100),
+        "ORDER BY created_at DESC LIMIT $1 OFFSET $2",
+        page_size,
+        (page - 1) * page_size,
     )
-    return [dict(row) for row in rows]
+    return {
+        "runs": [dict(row) for row in rows],
+        "pagination": {
+            "page": page,
+            "page_size": page_size,
+            "total": total,
+            "total_pages": total_pages,
+            "has_previous": page > 1,
+            "has_next": page < total_pages,
+        },
+        "status_counts": {row["status"]: row["count"] for row in status_rows},
+    }
 
 
 @sio.event
@@ -313,7 +333,7 @@ async def _execute_run(run_id: str, tasks: list[Task], seed: int) -> None:
         gbfs, pso = await asyncio.gather(
             asyncio.to_thread(compute_gbfs, tasks, PROFILES, forecast_tick_sec),
             asyncio.to_thread(
-                compute_binary_pso,
+                compute_pso,
                 tasks,
                 PROFILES,
                 seed=seed,

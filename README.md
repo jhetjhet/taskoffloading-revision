@@ -1,6 +1,6 @@
 # Industrial IoT Edge-Cloud Task Offloading Simulation System
 
-A distributed research and simulation platform designed to evaluate and optimize task offloading decisions in Industrial Internet of Things (IIoT) smart manufacturing environments. The platform compares sequential greedy heuristic decisions (**Greedy Best-First Search — GBFS**) against combinatorial swarm optimization (**Binary Particle Swarm Optimization — PSO**) across distributed virtual **Edge** and **Cloud** servers.
+A distributed research and simulation platform designed to evaluate and optimize task offloading decisions in Industrial Internet of Things (IIoT) smart manufacturing environments. The platform compares sequential greedy heuristic decisions (**Greedy Best-First Search — GBFS**) against global swarm optimization (**Particle Swarm Optimization — PSO**) across distributed virtual **Edge** and **Cloud** servers.
 
 ---
 
@@ -118,7 +118,7 @@ A task will transition to `FAILED` status under any of the following constraints
 
 ---
 
-## 4. Algorithms: GBFS vs. Binary PSO
+## 4. Algorithms: GBFS vs. PSO
 
 ### 4.1 Greedy Best-First Search (GBFS)
 
@@ -157,14 +157,14 @@ Heuristic Score = Estimated Network Time + (0.8 * Estimated Queue Backlog) + (0.
 
 ---
 
-### 4.2 Binary Particle Swarm Optimization (Binary PSO)
+### 4.2 Particle Swarm Optimization (PSO)
 
-Binary PSO optimizes the **entire batch globally**, evaluating assignment combinations across a search space of `2^N` possible configurations.
+PSO optimizes the **entire batch globally** by evolving continuous particle positions that represent each task's tendency to be assigned to Cloud vs. Edge.
 
 #### Representation
-- **Position Vector**: `X_i = (x_i1, x_i2, ..., x_iN)`, where:
-  - `x_id = 0` -> **Edge Server A**
-  - `x_id = 1` -> **Cloud Server B**
+- **Position Vector**: `X_i = (x_i1, x_i2, ..., x_iN)`, where each `x_id` is a continuous value in `[0, 1]`.
+  - `x_id < 0.5` -> **Edge Server A**
+  - `x_id >= 0.5` -> **Cloud Server B**
 - **Swarm Size**: `M = 12` particles.
 - **Iterations**: `T = 40` iterations.
 
@@ -174,11 +174,7 @@ At iteration `t + 1`:
 ```text
 v_id(t+1) = clamp( w * v_id(t) + c1 * r1 * (p_id - x_id(t)) + c2 * r2 * (g_d - x_id(t)), -v_max, v_max )
 
-Sigmoid Transfer Function:
-S(v_id(t+1)) = 1 / ( 1 + exp( -v_id(t+1) ) )
-
-Position Sampling:
-x_id(t+1) = 1 if rand() < S(v_id(t+1)) else 0
+x_id(t+1) = clamp( x_id(t) + v_id(t+1), 0, 1 )
 ```
 
 #### Hyperparameters
@@ -187,7 +183,7 @@ x_id(t+1) = 1 if rand() < S(v_id(t+1)) else 0
 | **Inertia Weight** | `w` | `0.7` | Balances exploration vs. exploitation |
 | **Cognitive Acceleration** | `c1` | `1.5` | Particle memory attraction |
 | **Social Acceleration** | `c2` | `1.5` | Swarm global best attraction |
-| **Velocity Clamp** | `v_max` | `4.0` | Prevents probability saturation |
+| **Velocity Clamp** | `v_max` | `4.0` | Prevents velocity explosion and bounds max step size per iteration |
 | **Random Seed** | `seed` | `12345` | Ensures deterministic, reproducible search results |
 
 #### Multi-Objective Lexicographical Fitness Function

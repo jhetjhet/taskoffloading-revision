@@ -11,7 +11,7 @@ export const ServerAllocationReport = ({ report, T }) => (
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
             <Stat label="Edge / Server A" value={edge} color="blue" />
             <Stat label="Cloud / Server B" value={cloud} color="purple" />
-            <Stat label="PSO iterations" value={algorithm.iterations_performed || 0} color="amber" />
+            <Stat label={`${algorithm.algorithm == "PSO" ? "PSO" : "GBFS"} iterations`} value={algorithm.iterations_performed || 0} color="amber" />
           </div>
         </Card>
       );

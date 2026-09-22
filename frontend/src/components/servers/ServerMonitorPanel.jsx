@@ -242,7 +242,7 @@ export const ServerMonitorPanel = ({ liveUsage = {} }) => {
       <div
         style={{
           overflow: "hidden",
-          maxHeight: open ? 360 : 0,
+          maxHeight: open ? 500 : 0,
           transition: "max-height 0.35s cubic-bezier(.4,0,.2,1)",
         }}
       >

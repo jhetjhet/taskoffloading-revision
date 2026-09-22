@@ -121,8 +121,17 @@ def generate_analytics_report(
     pso_metrics["actual_latency_ms"] = pso_act_lat
     pso_metrics["deviation_pct"] = pso_dev_pct
 
-    # Determine winning algorithm
-    winner = "PSO" if pso_metrics["latency_ms"] <= gbfs_metrics["latency_ms"] else "GBFS"
+    # Determine winning algorithm: Priority 1: Fewer failed tasks (higher completion). Priority 2: Lower average latency.
+    pso_failed = pso_metrics.get("failed_tasks", 0)
+    gbfs_failed = gbfs_metrics.get("failed_tasks", 0)
+    if pso_failed < gbfs_failed:
+        winner = "PSO"
+    elif gbfs_failed < pso_failed:
+        winner = "GBFS"
+    elif pso_metrics["latency_ms"] <= gbfs_metrics["latency_ms"]:
+        winner = "PSO"
+    else:
+        winner = "GBFS"
     winner_metrics = pso_metrics if winner == "PSO" else gbfs_metrics
     winner_alloc = pso_result.allocation if winner == "PSO" else gbfs_result.allocation
     edge_count = sum(1 for s in winner_alloc if s == ServerId.EDGE)
@@ -236,9 +245,9 @@ def generate_analytics_report(
             "winner": winner,
             "recommended_server": rec_server,
             "summary_text": (
-                f"{winner} is selected as the optimal offloading algorithm with an average latency of "
-                f"{winner_metrics['latency_ms']} ms ({lat_imp_pct}% improvement over the local machine baseline) "
-                f"and {energy_save_pct}% energy reduction."
+                f"{winner} is selected as the optimal offloading algorithm with a completion rate of "
+                f"{winner_metrics['finished_tasks']}/{len(tasks)} tasks and an average latency of "
+                f"{winner_metrics['latency_ms']} ms ({lat_imp_pct}% improvement over the local machine baseline)."
             ),
         },
     }

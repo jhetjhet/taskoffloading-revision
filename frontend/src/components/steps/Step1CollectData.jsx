@@ -8,6 +8,13 @@ import { buildBenchmarkBatch } from "../../utils/workload";
 
 const simulationApi = axios.create({ baseURL: import.meta.env.VITE_API_URL || "/api/v1" });
 const MAX_BATCH_SIZE = Number(import.meta.env.VITE_MAX_BATCH_SIZE) || 15;
+const SIMULATION_FIELDS = [
+  "payload_size_mb",
+  "processing_duration_sec",
+  "cpu_demand_percent",
+  "ram_demand_mb",
+  "max_tolerable_latency_sec",
+];
 
 export const Step1CollectData = ({ machine, tasks: machineTasks = [], onBatchChange = () => {} }) => {
   const T = useT();
@@ -36,7 +43,10 @@ export const Step1CollectData = ({ machine, tasks: machineTasks = [], onBatchCha
     : machineTasks[0]?.task_id || "";
 
   useEffect(() => {
-    const signature = batchTasks.map((task) => task.task_id).join("|");
+    const signature = batchTasks.map((task) => [
+      task.task_id,
+      ...SIMULATION_FIELDS.map((field) => task[field]),
+    ].join(":")).join("|");
     if (signature !== lastBatchSignature.current) {
       lastBatchSignature.current = signature;
       onBatchChange(batchTasks);
@@ -54,6 +64,40 @@ export const Step1CollectData = ({ machine, tasks: machineTasks = [], onBatchCha
     setCustomTasksByMachine((current) => ({
       ...current,
       [machine.id]: [...customTasks, ...additions],
+    }));
+  };
+
+  const copyCustomTask = (index) => {
+    if (customTasks.length >= MAX_BATCH_SIZE) return;
+    const target = customTasks[index];
+    if (!target) return;
+    const baseId = target.task_id.replace(/-C\d+.*$/, "");
+    const newIndex = customTasks.length + 1;
+    let uniqueId = `${baseId}-C${newIndex}`;
+    let suffix = 1;
+    while (customTasks.some((t) => t.task_id === uniqueId)) {
+      uniqueId = `${baseId}-C${newIndex}_${suffix++}`;
+    }
+    const duplicate = {
+      ...target,
+      task_id: uniqueId,
+      batch_index: newIndex,
+    };
+    const nextTasks = [...customTasks];
+    nextTasks.splice(index + 1, 0, duplicate);
+    setCustomTasksByMachine((current) => ({
+      ...current,
+      [machine.id]: nextTasks,
+    }));
+  };
+
+  const updateCustomTask = (index, field, value) => {
+    if (!SIMULATION_FIELDS.includes(field)) return;
+    setCustomTasksByMachine((current) => ({
+      ...current,
+      [machine.id]: customTasks.map((task, taskIndex) => (
+        taskIndex === index ? { ...task, [field]: value } : task
+      )),
     }));
   };
 
@@ -116,10 +160,16 @@ export const Step1CollectData = ({ machine, tasks: machineTasks = [], onBatchCha
       </div>
 
       {serverError && <ErrBox>{serverError}</ErrBox>}
-      <TaskBatchPreviewTable tasks={batchTasks} custom={!workload} onRemoveTask={(index) => setCustomTasksByMachine((current) => ({
-        ...current,
-        [machine.id]: customTasks.filter((_, taskIndex) => taskIndex !== index),
-      }))} />
+      <TaskBatchPreviewTable
+        tasks={batchTasks}
+        custom={!workload}
+        onTaskChange={updateCustomTask}
+        onCopyTask={copyCustomTask}
+        onRemoveTask={(index) => setCustomTasksByMachine((current) => ({
+          ...current,
+          [machine.id]: customTasks.filter((_, taskIndex) => taskIndex !== index),
+        }))}
+      />
 
       {batchSummary && (
         <div style={{ marginTop: 16 }}>

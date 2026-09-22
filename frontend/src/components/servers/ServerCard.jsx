@@ -123,7 +123,7 @@ export const ServerCard = ({ server, accentColor }) => {
               whiteSpace: "nowrap",
               overflow: "hidden",
               textOverflow: "ellipsis",
-              marginBottom: 4,
+              marginBottom: 2,
             }}
           >
             {server.label}
@@ -142,7 +142,7 @@ export const ServerCard = ({ server, accentColor }) => {
           <StatusLabel status={server.status} />
         </div>
 
-        {/* CPU ring – sole visual accent */}
+        {/* CPU ring – live utilization */}
         <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, flexShrink: 0 }}>
           <div style={{ position: "relative", display: "inline-flex" }}>
             <RingGauge pct={cpuPct} color={cpuColor} size={44} stroke={4} />
@@ -158,27 +158,53 @@ export const ServerCard = ({ server, accentColor }) => {
             </div>
           </div>
           <span style={{ fontSize: 9, color: T.dim, fontFamily: T.fontSans, textTransform: "uppercase", letterSpacing: "0.06em" }}>
-            CPU
+            CPU Load
           </span>
+        </div>
+      </div>
+
+      {/* ── Server Specifications (Minimal) ── */}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(3, 1fr)",
+          gap: "4px 8px",
+          padding: "6px 8px",
+          background: T.elevated,
+          borderRadius: 6,
+          border: `1px solid ${T.borderSub || T.border}`,
+        }}
+      >
+        <div>
+          <div style={{ fontSize: 9, color: T.dim, fontFamily: T.fontSans, textTransform: "uppercase", letterSpacing: "0.05em" }}>CPU</div>
+          <div style={{ fontSize: 10, fontWeight: 600, color: T.text, fontFamily: T.fontMono }}>{server.cpu_cores ?? "-"}c · {server.processing_speed ?? 1}x</div>
+        </div>
+        <div>
+          <div style={{ fontSize: 9, color: T.dim, fontFamily: T.fontSans, textTransform: "uppercase", letterSpacing: "0.05em" }}>RAM</div>
+          <div style={{ fontSize: 10, fontWeight: 600, color: T.text, fontFamily: T.fontMono }}>{server.max_ram_mb ?? "-"} MB</div>
+        </div>
+        <div>
+          <div style={{ fontSize: 9, color: T.dim, fontFamily: T.fontSans, textTransform: "uppercase", letterSpacing: "0.05em" }}>Storage</div>
+          <div style={{ fontSize: 10, fontWeight: 600, color: T.text, fontFamily: T.fontMono }}>{server.storage_mb ?? "-"} MB</div>
+        </div>
+        <div>
+          <div style={{ fontSize: 9, color: T.dim, fontFamily: T.fontSans, textTransform: "uppercase", letterSpacing: "0.05em" }}>Latency</div>
+          <div style={{ fontSize: 10, fontWeight: 600, color: T.text, fontFamily: T.fontMono }}>{server.network_latency_ms ?? "-"} ms</div>
+        </div>
+        <div style={{ gridColumn: "span 2" }}>
+          <div style={{ fontSize: 9, color: T.dim, fontFamily: T.fontSans, textTransform: "uppercase", letterSpacing: "0.05em" }}>Bandwidth</div>
+          <div style={{ fontSize: 10, fontWeight: 600, color: T.text, fontFamily: T.fontMono }}>{server.bandwidth_mb_s ?? "-"} MB/s</div>
         </div>
       </div>
 
       {/* ── Resource bars ── */}
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        <ResourceBar label="RAM" pct={ramPct} value={`${Math.round(ramPct)}%`} />
+        <ResourceBar label="RAM Usage" pct={ramPct} value={`${Math.round(ramPct)}%`} />
         <ResourceBar
-          label="Storage"
+          label="Storage Buffer"
           pct={server.storage_utilization_percent ?? storagePct}
           value={`${Math.round(server.storage_utilization_percent ?? storagePct)}%`}
         />
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-          <span style={{ fontSize: 10, color: T.dim, fontFamily: T.fontSans, textTransform: "uppercase", letterSpacing: "0.07em" }}>
-            Net latency
-          </span>
-          <span style={{ fontSize: 10, color: T.muted, fontFamily: T.fontMono }}>
-            {server.network_latency_ms ?? "-"} ms
-          </span>
-        </div>
       </div>
 
       {/* ── Divider ── */}

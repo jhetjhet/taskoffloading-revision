@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS task_templates (
     task_name TEXT NOT NULL,
     payload_size_mb DOUBLE PRECISION NOT NULL CHECK (payload_size_mb > 0),
     processing_duration_sec DOUBLE PRECISION NOT NULL CHECK (processing_duration_sec > 0),
-    cpu_demand_percent DOUBLE PRECISION NOT NULL CHECK (cpu_demand_percent > 0 AND cpu_demand_percent <= 100),
+    cpu_demand_percent DOUBLE PRECISION NOT NULL CHECK (cpu_demand_percent > 0),
     ram_demand_mb DOUBLE PRECISION NOT NULL CHECK (ram_demand_mb > 0),
     max_tolerable_latency_sec DOUBLE PRECISION NOT NULL CHECK (max_tolerable_latency_sec > 0),
     attributes JSONB NOT NULL DEFAULT '{}'::jsonb

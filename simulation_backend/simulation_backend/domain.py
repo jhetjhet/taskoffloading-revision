@@ -90,8 +90,8 @@ class Task:
     def __post_init__(self) -> None:
         if self.payload_size_mb <= 0 or self.processing_duration_sec <= 0:
             raise ValueError("task payload and processing duration must be positive")
-        if not 0 < self.cpu_demand_percent <= 100:
-            raise ValueError("task CPU demand must be in (0, 100]")
+        if self.cpu_demand_percent <= 0:
+            raise ValueError("task CPU demand must be positive")
         if self.ram_demand_mb <= 0 or self.max_tolerable_latency_sec <= 0:
             raise ValueError("task RAM demand and SLA must be positive")
 

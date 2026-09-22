@@ -6,6 +6,7 @@ import { AlgorithmReportTable } from "./reports/AlgorithmReportTable";
 import { ServerAllocationReport } from "./reports/ServerAllocationReport";
 import { MetricWinTally } from "./reports/MetricWinTally";
 import { AnalyticsDashboard } from "./reports/AnalyticsDashboard";
+import { ReportInterpretation } from "./reports/ReportInterpretation";
 
 export const Step4Reports = ({ report }) => {
   const T = useT();
@@ -20,8 +21,9 @@ export const Step4Reports = ({ report }) => {
         <h1 style={{ fontSize: 22, color: T.text, margin: 0, fontFamily: T.fontSans }}>Offloading Report</h1>
         <p style={{ color: T.muted, fontFamily: T.fontSans }}>Run {report.id} · measured simulation results</p>
       </div>
-      <AnalyticsDashboard analytics={report.analytics} T={T} />
       <ReportSummary report={report} />
+      <ReportInterpretation report={report} T={T} />
+      <AnalyticsDashboard analytics={report.analytics} T={T} />
       <ServerAllocationReport report={report} T={T} />
       <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 12, marginTop: 12 }}>
         {report.algorithms.map((algorithm) => (

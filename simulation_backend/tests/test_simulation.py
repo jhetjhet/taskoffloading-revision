@@ -1,4 +1,4 @@
-from simulation_backend.algorithms import compute_binary_pso, compute_gbfs
+from simulation_backend.algorithms import compute_gbfs, compute_pso
 from simulation_backend.domain import (
     CLOUD_PROFILE,
     EDGE_PROFILE,
@@ -72,6 +72,19 @@ def test_simulator_only_emits_queue_when_cpu_is_unavailable() -> None:
     assert statuses_by_task["queued-2"] == ["TRANSFERRING", "IN_QUEUE", "RUNNING", "FINISHED"]
 
 
+def test_two_hundred_percent_cpu_task_uses_both_edge_cores() -> None:
+    task = make_task("two-cores", cpu_demand_percent=200, processing_duration_sec=0.03)
+    events = []
+
+    result = DiscreteEventSimulator(PROFILES, tick_sec=0.01).simulate(
+        [task], [ServerId.EDGE], on_event=events.append
+    )
+
+    assert result.tasks[0].status == TaskStatus.FINISHED
+    running_event = next(event for event in events if event["task"]["status"] == "RUNNING")
+    assert running_event["usage"]["cpu_utilization_percent"] == 100.0
+
+
 def test_server_network_latency_and_processing_multiplier_are_accounted_for() -> None:
     task = make_task("timing", payload_size_mb=10, processing_duration_sec=2.5)
     result = DiscreteEventSimulator(PROFILES, tick_sec=0.01).simulate(
@@ -103,17 +116,28 @@ def test_pso_is_reproducible_and_can_move_work_to_cloud() -> None:
         make_task(f"task-{index}", processing_duration_sec=10, ram_demand_mb=100)
         for index in range(6)
     ]
-    first = compute_binary_pso(tasks, PROFILES, seed=17, particles=10, iterations=20)
-    second = compute_binary_pso(tasks, PROFILES, seed=17, particles=10, iterations=20)
+    first = compute_pso(tasks, PROFILES, seed=17, particles=10, iterations=20)
+    second = compute_pso(tasks, PROFILES, seed=17, particles=10, iterations=20)
 
     assert first.allocation == second.allocation
     assert ServerId.CLOUD in first.allocation
     assert first.simulation.failed_count <= 1
 
 
+def test_pso_uses_continuous_particle_positions() -> None:
+    tasks = [make_task(f"continuous-{index}") for index in range(3)]
+    result = compute_pso(tasks, PROFILES, seed=17, particles=6, iterations=4)
+    final = result.telemetry[-1]
+
+    assert all(isinstance(value, float) for p in final["particles"] for value in [p["x"]])
+    assert len(final["global_allocation"]) == len(tasks)
+    assert final["edge_task_count"] + final["cloud_task_count"] == len(tasks)
+    assert set(final["global_allocation"]) <= {"SERVER_A", "SERVER_B"}
+
+
 def test_pso_telemetry_exposes_full_global_allocation() -> None:
     tasks = [make_task(f"allocation-{index}") for index in range(3)]
-    result = compute_binary_pso(tasks, PROFILES, seed=17, particles=4, iterations=3)
+    result = compute_pso(tasks, PROFILES, seed=17, particles=4, iterations=3)
     final = result.telemetry[-1]
 
     assert len(final["global_allocation"]) == len(tasks)

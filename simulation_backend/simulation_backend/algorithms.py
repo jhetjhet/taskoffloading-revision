@@ -125,47 +125,54 @@ def _fitness(result: object) -> tuple[float, float, float, float]:
     )
 
 
-def compute_binary_pso(
+def compute_pso(
     tasks: list[Task],
     profiles: Mapping[ServerId, ServerProfile],
     *,
     seed: int = 12345,
     particles: int = 12,
     iterations: int = 40,
+    threshold: float = 0.5,
     tick_sec: float = 0.01,
 ) -> AllocationResult:
-    """Search binary Edge/Cloud allocations using deterministic binary PSO."""
+    """Search Edge/Cloud allocations using deterministic continuous PSO."""
     if particles < 2 or iterations < 1:
         raise ValueError("particles must be at least two and iterations must be positive")
+    if not 0.0 <= threshold <= 1.0:
+        raise ValueError("threshold must be within [0, 1]")
+
     randomizer = random.Random(seed)
     simulator = DiscreteEventSimulator(profiles, tick_sec)
     dimensions = len(tasks)
     telemetry: list[dict] = []
 
-    def evaluate(position: list[int]) -> object:
-        allocation = [ServerId.CLOUD if bit else ServerId.EDGE for bit in position]
-        return simulator.simulate(tasks, allocation)
+    def allocate(position: list[float]) -> list[ServerId]:
+        return [ServerId.CLOUD if value >= threshold else ServerId.EDGE for value in position]
+
+    def evaluate(position: list[float]) -> object:
+        return simulator.simulate(tasks, allocate(position))
 
     swarm = []
     for p_idx in range(particles):
-        position = [randomizer.randrange(2) for _ in range(dimensions)]
+        position = [randomizer.random() for _ in range(dimensions)]
+        velocity = [randomizer.uniform(-0.3, 0.3) for _ in range(dimensions)]
         result = evaluate(position)
         swarm.append({
             "id": f"P{p_idx + 1}",
             "position": position,
-            "velocity": [randomizer.uniform(-0.2, 0.2) for _ in range(dimensions)],
+            "velocity": velocity,
             "best_position": position.copy(),
             "best_result": result,
             "result": result,
         })
+
     global_best = min(swarm, key=lambda particle: _fitness(particle["best_result"]))
     global_position = global_best["best_position"].copy()
     global_result = global_best["best_result"]
 
-    # Record initial iteration 0 telemetry
     def build_iter_snapshot(iter_num: int) -> dict:
         part_summaries = []
-        for p in swarm[:4]: # Top 4 particles for UI clarity
+        for p in swarm[:4]:
             pos_ratio = sum(p["position"]) / max(1, dimensions)
             leaning = "Cloud Server B" if pos_ratio >= 0.5 else "Edge Server A"
             fit_val = round(p["result"].total_completed_latency_sec + (p["result"].failed_count * 10.0), 3)
@@ -177,15 +184,15 @@ def compute_binary_pso(
             })
         best_x = round(sum(global_position) / max(1, dimensions), 3)
         best_fit = round(global_result.total_completed_latency_sec + (global_result.failed_count * 10.0), 3)
-        edge_count = global_position.count(0)
-        cloud_count = global_position.count(1)
+        edge_count = sum(1 for value in global_position if value < threshold)
+        cloud_count = len(global_position) - edge_count
         return {
             "iteration": iter_num,
             "total_iterations": iterations,
             "best_fitness": best_fit,
             "best_x": best_x,
             "recommended_server": "SERVER_B" if best_x >= 0.5 else "SERVER_A",
-            "global_allocation": ["SERVER_B" if bit else "SERVER_A" for bit in global_position],
+            "global_allocation": ["SERVER_B" if value >= threshold else "SERVER_A" for value in global_position],
             "edge_task_count": edge_count,
             "cloud_task_count": cloud_count,
             "particles": part_summaries,
@@ -193,7 +200,7 @@ def compute_binary_pso(
 
     telemetry.append(build_iter_snapshot(0))
 
-    inertia, cognitive, social, max_velocity = 0.7, 1.5, 1.5, 4.0
+    inertia, cognitive, social, max_velocity = 0.7, 1.5, 1.5, 1.0
     for iter_idx in range(1, iterations + 1):
         for particle in swarm:
             for dimension in range(dimensions):
@@ -207,8 +214,10 @@ def compute_binary_pso(
                     * (global_position[dimension] - particle["position"][dimension])
                 )
                 particle["velocity"][dimension] = max(-max_velocity, min(max_velocity, velocity))
-                probability = 1 / (1 + exp(-particle["velocity"][dimension]))
-                particle["position"][dimension] = int(randomizer.random() < probability)
+                particle["position"][dimension] = max(
+                    0.0,
+                    min(1.0, particle["position"][dimension] + particle["velocity"][dimension]),
+                )
             particle["result"] = evaluate(particle["position"])
             if _fitness(particle["result"]) < _fitness(particle["best_result"]):
                 particle["best_position"] = particle["position"].copy()
@@ -219,5 +228,6 @@ def compute_binary_pso(
 
         telemetry.append(build_iter_snapshot(iter_idx))
 
-    allocation = tuple(ServerId.CLOUD if bit else ServerId.EDGE for bit in global_position)
+    allocation = tuple(ServerId.CLOUD if value >= threshold else ServerId.EDGE for value in global_position)
     return AllocationResult(allocation, global_result, iterations, telemetry=telemetry)
+
