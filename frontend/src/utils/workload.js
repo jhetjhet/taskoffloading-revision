@@ -23,10 +23,13 @@ const MAX_BATCH_SIZE = Number(import.meta.env.VITE_MAX_BATCH_SIZE) || 15;
 
 export const getBenchmarkTaskCount = (workload, tasks, servers, maximum = MAX_BATCH_SIZE) => {
   if (!tasks?.length || !servers?.length || !WORKLOAD_TARGETS[workload]) return 0;
-  const profiles = servers.filter((server) => server.placement === "EDGE" || server.placement === "CLOUD");
-  const uniqueProfiles = profiles.filter((server, index, list) => (
-    list.findIndex((candidate) => candidate.placement === server.placement) === index
-  ));
+  const profiles = servers.filter((server) => server && server.placement != null && server.placement !== "");
+  const uniqueProfiles = profiles.filter((server, index, list) => {
+    const profileId = server.profile_id || server.server_id?.split(":").pop() || server.name;
+    return list.findIndex((candidate) => (
+      (candidate.profile_id || candidate.server_id?.split(":").pop() || candidate.name) === profileId
+    )) === index;
+  });
   const capacity = uniqueProfiles.reduce((total, server) => total + serverCapacity(server, tasks), 0);
   return Math.max(1, Math.min(maximum, Math.round(capacity * WORKLOAD_TARGETS[workload])));
 };

@@ -7,6 +7,7 @@ import { ServerAllocationReport } from "./reports/ServerAllocationReport";
 import { MetricWinTally } from "./reports/MetricWinTally";
 import { AnalyticsDashboard } from "./reports/AnalyticsDashboard";
 import { ReportInterpretation } from "./reports/ReportInterpretation";
+import { ServerActivitySummary } from "./reports/ServerActivitySummary";
 
 export const Step4Reports = ({ report }) => {
   const T = useT();
@@ -24,6 +25,7 @@ export const Step4Reports = ({ report }) => {
       <ReportSummary report={report} />
       <ReportInterpretation report={report} T={T} />
       <AnalyticsDashboard analytics={report.analytics} T={T} />
+      <ServerActivitySummary analytics={report.analytics} T={T} />
       <ServerAllocationReport report={report} T={T} />
       <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 12, marginTop: 12 }}>
         {report.algorithms.map((algorithm) => (

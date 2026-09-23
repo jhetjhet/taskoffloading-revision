@@ -1,9 +1,12 @@
 import React from "react";
 import { useT } from "../../../context/ThemeContext";
+import { formatServerLabel } from "../../../utils/serverLabels";
 
-export const PSOTrack = ({ bestX = 0, particles = [] }) => {
+export const PSOTrack = ({ bestX = 0, particles = [], serverIds = [] }) => {
   const T = useT();
   const bestXPct = Math.min(Math.max(bestX * 100, 0), 100);
+  const firstServer = serverIds[0] ? formatServerLabel(serverIds[0]) : "Position 0";
+  const lastServer = serverIds.length > 1 ? formatServerLabel(serverIds[serverIds.length - 1]) : "Position 1";
 
   return (
     <div
@@ -27,7 +30,7 @@ export const PSOTrack = ({ bestX = 0, particles = [] }) => {
           color: T.dim,
         }}
       >
-        Edge A
+        {firstServer}
       </div>
       <div
         style={{
@@ -39,7 +42,7 @@ export const PSOTrack = ({ bestX = 0, particles = [] }) => {
           color: T.dim,
         }}
       >
-        Cloud B
+        {lastServer}
       </div>
 
       {/* Global best indicator needle */}

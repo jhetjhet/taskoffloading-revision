@@ -6,6 +6,7 @@ from math import inf
 from typing import Any, Callable, Mapping
 
 from .domain import ServerId, ServerProfile, SimulationResult, Task, TaskResult, TaskStatus
+from .server_catalog import server_key
 
 
 @dataclass(slots=True)
@@ -225,12 +226,12 @@ class DiscreteEventSimulator:
             {
                 "task": {
                     "task_id": runtime.task.task_id,
-                    "server": profile.server_id.value,
+                    "server": server_key(profile.server_id),
                     "status": runtime.status.value,
                     "error_message": runtime.error_message,
                 },
                 "usage": {
-                    "server_id": profile.server_id.value,
+                    "server_id": server_key(profile.server_id),
                     "status": "BUSY" if active else ("DEGRADED" if counts[TaskStatus.FAILED.value] else "IDLE"),
                     "tasks_in_flight": active,
                     "queue_depth": counts[TaskStatus.IN_QUEUE.value],

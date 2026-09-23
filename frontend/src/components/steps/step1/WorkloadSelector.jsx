@@ -49,7 +49,7 @@ export const WorkloadSelector = ({
       {workload && (
         <div style={{ marginTop: 12 }}>
           <InfoBox color={workload === "high" ? "red" : workload === "mid" ? "amber" : "green"}>
-            Benchmark batch size is calculated from the selected machine templates and Edge/Cloud server capacity.
+            Benchmark batch size is calculated from the selected machine templates and configured server capacity.
           </InfoBox>
         </div>
       )}

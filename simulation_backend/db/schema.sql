@@ -46,7 +46,7 @@ CREATE TABLE IF NOT EXISTS task_execution_results (
     run_id UUID NOT NULL REFERENCES simulation_runs(id) ON DELETE CASCADE,
     algorithm TEXT NOT NULL CHECK (algorithm IN ('GBFS', 'PSO')),
     task_id TEXT NOT NULL,
-    assigned_server TEXT NOT NULL CHECK (assigned_server IN ('SERVER_A', 'SERVER_B')),
+    assigned_server TEXT NOT NULL CHECK (length(trim(assigned_server)) > 0),
     status TEXT NOT NULL CHECK (status IN ('PENDING', 'TRANSFERRING', 'IN_QUEUE', 'RUNNING', 'FINISHED', 'FAILED')),
     transmission_time_sec DOUBLE PRECISION NOT NULL,
     queue_wait_time_sec DOUBLE PRECISION NOT NULL,

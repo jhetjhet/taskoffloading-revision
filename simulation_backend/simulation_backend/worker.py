@@ -7,20 +7,20 @@ from queue import Queue
 
 import redis.asyncio as redis
 
-from .domain import CLOUD_PROFILE, EDGE_PROFILE, ServerId, Task
+from .domain import Task
 from .engine import DiscreteEventSimulator
+from .server_catalog import OFFLOAD_PROFILES, server_key
 
-PROFILES = {ServerId.EDGE: EDGE_PROFILE, ServerId.CLOUD: CLOUD_PROFILE}
-
-_PLACEMENT_LABEL: dict[str, str] = {
-    ServerId.EDGE.value: "EDGE",
-    ServerId.CLOUD.value: "CLOUD",
-}
-
+PROFILES = OFFLOAD_PROFILES
 
 async def main() -> None:
     redis_url = os.environ.get("REDIS_URL", "redis://redis:6379/0")
-    owner = os.environ["SIMULATION_OWNER"]
+    algorithm = os.environ.get("SIMULATION_ALGORITHM")
+    owner = os.environ.get("SIMULATION_OWNER")
+    if not algorithm and owner:
+        algorithm = owner.split(":", 1)[0]
+    if algorithm not in {"GBFS", "PSO"}:
+        raise ValueError("SIMULATION_ALGORITHM must be GBFS or PSO")
     event_delay_sec = max(0.0, float(os.environ.get("SIMULATION_EVENT_DELAY_SEC", "0.02")))
     time_scale = max(0.0, float(os.environ.get("SIMULATION_TIME_SCALE", "0.02")))
     execution_tick_sec = max(
@@ -28,13 +28,16 @@ async def main() -> None:
     )
     client = redis.from_url(redis_url, decode_responses=True)
     pubsub = client.pubsub()
-    await pubsub.subscribe(f"simulation:commands:{owner}")
+    await pubsub.psubscribe(f"simulation:commands:{algorithm}:*")
     async for message in pubsub.listen():
-        if message["type"] == "message":
+        if message["type"] == "pmessage":
             command = json.loads(message["data"])
-            if f"{command['algorithm']}:{command['server']}" != owner:
+            if command.get("algorithm") != algorithm:
                 continue
-            server = ServerId(command["server"])
+            raw_server_key = str(command["server"])
+            server = next((server_id for server_id in PROFILES if server_key(server_id) == raw_server_key), None)
+            if server is None:
+                raise ValueError(f"unknown configured server: {raw_server_key}")
             tasks = [Task(**task) for task in command["tasks"]]
             events: Queue[dict | None] = Queue()
 
@@ -80,7 +83,7 @@ async def main() -> None:
                             "algorithm": command["algorithm"],
                             **event["usage"],
                             "server_id": f"{command['algorithm']}:{event['usage']['server_id']}",
-                            "placement": _PLACEMENT_LABEL.get(event["usage"]["server_id"], event["usage"]["server_id"]),
+                            "placement": PROFILES[server].placement or event["usage"]["server_id"],
                         }
                     ),
                 )

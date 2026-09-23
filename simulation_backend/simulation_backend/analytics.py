@@ -1,17 +1,12 @@
 from __future__ import annotations
 
-
 from typing import Mapping
 
-from .domain import CLOUD_PROFILE, EDGE_PROFILE, LOCAL_PROFILE, ServerId, ServerProfile, Task
+from .domain import LOCAL_PROFILE, ServerId, ServerProfile, Task
 from .engine import DiscreteEventSimulator
+from .server_catalog import OFFLOAD_PROFILES, server_key
 
-
-PROFILES: Mapping[ServerId, ServerProfile] = {
-    ServerId.EDGE: EDGE_PROFILE,
-    ServerId.CLOUD: CLOUD_PROFILE,
-    ServerId.LOCAL: LOCAL_PROFILE,
-}
+PROFILES = OFFLOAD_PROFILES
 
 
 def compute_baseline_simulation(tasks: list[Task], tick_sec: float = 0.01) -> object:
@@ -54,7 +49,13 @@ def _compute_metrics_for_sim(tasks: list[Task], sim_result: object, profile_map:
     # E (kWh) = sum(execution_time_sec * energy_coefficient / 3600) + tx_energy
     total_energy_kwh = 0.0
     for t in finished:
-        srv_profile = profile_map.get(t.assigned_server, EDGE_PROFILE)
+        assigned_key = server_key(t.assigned_server)
+        srv_profile = next(
+            (profile for profile_id, profile in profile_map.items() if server_key(profile_id) == assigned_key),
+            None,
+        )
+        if srv_profile is None:
+            raise ValueError(f"unknown server profile in simulation result: {assigned_key}")
         compute_energy = (t.execution_time_sec * srv_profile.energy_coefficient)
         trans_energy = (t.transmission_time_sec * 0.02) # transmission RF energy
         total_energy_kwh += (compute_energy + trans_energy)
@@ -81,20 +82,101 @@ def _compute_metrics_for_sim(tasks: list[Task], sim_result: object, profile_map:
     }
 
 
+def _summarize_server_activity(
+    sim_result: object,
+    algorithm: str,
+    profile_map: Mapping[str, ServerProfile],
+) -> dict:
+    """Summarize task assignment, completion, and resource usage by server for the API payload."""
+    task_results = list(getattr(sim_result, "tasks", ()))
+    if not task_results:
+        empty = {
+            "assigned_tasks": 0,
+            "finished_tasks": 0,
+            "failed_tasks": 0,
+            "avg_latency_ms": 0.0,
+            "avg_queue_wait_ms": 0.0,
+            "avg_cpu_utilization_pct": 0.0,
+            "avg_memory_usage_mb": 0.0,
+            "avg_storage_utilization_pct": 0.0,
+        }
+        return {
+            "algorithm": algorithm,
+            "total_tasks": 0,
+            "servers": {str(server_id): empty.copy() for server_id in profile_map},
+        }
+
+    def empty_stats() -> dict[str, float | int]:
+        return {
+            "assigned_tasks": 0,
+            "finished_tasks": 0,
+            "failed_tasks": 0,
+            "latency_total_ms": 0.0,
+            "queue_wait_total_ms": 0.0,
+            "cpu_total_pct": 0.0,
+            "memory_total_mb": 0.0,
+            "storage_total_pct": 0.0,
+        }
+
+    by_server: dict[str, dict[str, float | int]] = {
+        str(server_id): empty_stats() for server_id in profile_map
+    }
+
+    for task in task_results:
+        server = server_key(task.assigned_server)
+        bucket = by_server.setdefault(server, empty_stats())
+        bucket["assigned_tasks"] = int(bucket["assigned_tasks"]) + 1
+        bucket["finished_tasks"] = int(bucket["finished_tasks"]) + int(task.status.value == "FINISHED")
+        bucket["failed_tasks"] = int(bucket["failed_tasks"]) + int(task.status.value == "FAILED")
+        bucket["latency_total_ms"] = float(bucket["latency_total_ms"]) + (task.total_latency_sec * 1000.0)
+        bucket["queue_wait_total_ms"] = float(bucket["queue_wait_total_ms"]) + (task.queue_wait_time_sec * 1000.0)
+        bucket["cpu_total_pct"] = float(bucket["cpu_total_pct"]) + float(task.cpu_usage_percent)
+        bucket["memory_total_mb"] = float(bucket["memory_total_mb"]) + float(task.memory_usage_mb)
+        bucket["storage_total_pct"] = float(bucket["storage_total_pct"]) + 0.0
+
+    servers: dict[str, dict[str, float | int]] = {}
+    for server_id, stats in by_server.items():
+        assigned = int(stats["assigned_tasks"])
+        avg_latency = float(stats["latency_total_ms"]) / assigned if assigned else 0.0
+        avg_queue_wait = float(stats["queue_wait_total_ms"]) / assigned if assigned else 0.0
+        avg_cpu = float(stats["cpu_total_pct"]) / assigned if assigned else 0.0
+        avg_memory = float(stats["memory_total_mb"]) / assigned if assigned else 0.0
+        servers[server_id] = {
+            "assigned_tasks": assigned,
+            "finished_tasks": int(stats["finished_tasks"]),
+            "failed_tasks": int(stats["failed_tasks"]),
+            "avg_latency_ms": round(avg_latency, 2),
+            "avg_queue_wait_ms": round(avg_queue_wait, 2),
+            "avg_cpu_utilization_pct": round(avg_cpu, 2),
+            "avg_memory_usage_mb": round(avg_memory, 2),
+            "avg_storage_utilization_pct": 0.0,
+        }
+
+    return {
+        "algorithm": algorithm,
+        "total_tasks": len(task_results),
+        "servers": servers,
+    }
+
+
 def generate_analytics_report(
     tasks: list[Task],
     gbfs_result: object,
     pso_result: object,
     actual_worker_tasks: list[dict] | None = None,
+    profile_map: Mapping[str, ServerProfile] | None = None,
 ) -> dict:
     """Generate the complete 6-section analytics report matching the dashboard specification."""
+    offload_profiles = profile_map or PROFILES
     # 1. Baseline simulation (Current System)
     baseline_sim = compute_baseline_simulation(tasks)
-    baseline_metrics = _compute_metrics_for_sim(tasks, baseline_sim, PROFILES)
+    baseline_metrics = _compute_metrics_for_sim(
+        tasks, baseline_sim, {ServerId.LOCAL: LOCAL_PROFILE}
+    )
 
     # 2. Algorithm Metrics
-    gbfs_metrics = _compute_metrics_for_sim(tasks, gbfs_result.simulation, PROFILES)
-    pso_metrics = _compute_metrics_for_sim(tasks, pso_result.simulation, PROFILES)
+    gbfs_metrics = _compute_metrics_for_sim(tasks, gbfs_result.simulation, offload_profiles)
+    pso_metrics = _compute_metrics_for_sim(tasks, pso_result.simulation, offload_profiles)
 
     # Actual latency validation against prediction
     gbfs_pred_lat = gbfs_metrics["latency_ms"]
@@ -134,8 +216,16 @@ def generate_analytics_report(
         winner = "GBFS"
     winner_metrics = pso_metrics if winner == "PSO" else gbfs_metrics
     winner_alloc = pso_result.allocation if winner == "PSO" else gbfs_result.allocation
-    edge_count = sum(1 for s in winner_alloc if s == ServerId.EDGE)
-    rec_server = "Edge Server A" if edge_count >= len(winner_alloc) / 2 else "Cloud Server B"
+    allocation_counts: dict[str, int] = {}
+    for server in winner_alloc:
+        key = server_key(server)
+        allocation_counts[key] = allocation_counts.get(key, 0) + 1
+    recommended_id = max(allocation_counts, key=allocation_counts.get) if allocation_counts else None
+    recommended_profile = next(
+        (profile for server_id, profile in offload_profiles.items() if server_key(server_id) == recommended_id),
+        None,
+    )
+    rec_server = recommended_profile.name if recommended_profile else recommended_id or "No server selected"
 
     # Improvements over baseline
     def calc_pct_change(base: float, new: float) -> float:
@@ -176,12 +266,18 @@ def generate_analytics_report(
     gbfs_energy_pct = round((gbfs_metrics["energy_kwh"] / max(0.0001, total_algo_energy)) * 100, 1)
     pso_energy_pct = round((pso_metrics["energy_kwh"] / max(0.0001, total_algo_energy)) * 100, 1)
 
+    server_activity_summary = {
+        "GBFS": _summarize_server_activity(gbfs_result.simulation, "GBFS", offload_profiles),
+        "PSO": _summarize_server_activity(pso_result.simulation, "PSO", offload_profiles),
+    }
+
     return {
         "raw_performance": {
             "baseline": baseline_metrics,
             "gbfs": gbfs_metrics,
             "pso": pso_metrics,
         },
+        "server_activity_summary": server_activity_summary,
         "radar_comparison": radar,
         "baseline_improvement": {
             "winner_algorithm": winner,

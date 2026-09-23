@@ -1,8 +1,10 @@
 from simulation_backend.algorithms import compute_gbfs, compute_pso
+from simulation_backend.analytics import generate_analytics_report
 from simulation_backend.domain import (
     CLOUD_PROFILE,
     EDGE_PROFILE,
     ServerId,
+    ServerProfile,
     Task,
     TaskStatus,
 )
@@ -143,3 +145,41 @@ def test_pso_telemetry_exposes_full_global_allocation() -> None:
     assert len(final["global_allocation"]) == len(tasks)
     assert final["edge_task_count"] + final["cloud_task_count"] == len(tasks)
     assert set(final["global_allocation"]) <= {"SERVER_A", "SERVER_B"}
+
+
+def test_algorithms_and_analytics_support_additional_server_profile() -> None:
+    satellite = ServerProfile(
+        server_id="SERVER_C",
+        network_latency_ms=20.0,
+        processing_speed=1.5,
+        storage_mb=750.0,
+        max_ram_mb=1500.0,
+        cpu_cores=4,
+        bandwidth_mb_s=100.0,
+    )
+    profiles = {**PROFILES, "SERVER_C": satellite}
+    tasks = [make_task(f"dynamic-{index}") for index in range(4)]
+
+    gbfs = compute_gbfs(tasks, profiles)
+    pso = compute_pso(tasks, profiles, seed=17, particles=6, iterations=5)
+    report = generate_analytics_report(tasks, gbfs, pso, profile_map=profiles)
+
+    assert set(gbfs.allocation) <= set(profiles)
+    assert set(pso.allocation) <= set(profiles)
+    assert set(report["server_activity_summary"]["GBFS"]["servers"]) == set(profiles)
+    assert set(report["server_activity_summary"]["PSO"]["servers"]) == set(profiles)
+
+
+def test_analytics_report_includes_server_activity_summary() -> None:
+    tasks = [make_task(f"summary-{index}", processing_duration_sec=3.0) for index in range(4)]
+    gbfs = compute_gbfs(tasks, PROFILES)
+    pso = compute_pso(tasks, PROFILES, seed=7, particles=6, iterations=5)
+
+    report = generate_analytics_report(tasks, gbfs, pso)
+    summary = report["server_activity_summary"]
+
+    assert set(summary) == {"GBFS", "PSO"}
+    for algorithm in summary.values():
+        assert set(algorithm["servers"]) == {"SERVER_A", "SERVER_B"}
+        assert algorithm["total_tasks"] == len(tasks)
+        assert algorithm["servers"]["SERVER_A"]["assigned_tasks"] + algorithm["servers"]["SERVER_B"]["assigned_tasks"] == len(tasks)

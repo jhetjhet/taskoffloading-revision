@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass
-from math import exp
 from typing import Mapping
 
 from .domain import ServerId, ServerProfile, Task
@@ -26,7 +25,7 @@ def _single_task_feasible(task: Task, profile: ServerProfile) -> bool:
 
 
 def compute_gbfs(
-    tasks: list[Task], profiles: Mapping[ServerId, ServerProfile], tick_sec: float = 0.01
+    tasks: list[Task], profiles: Mapping[str, ServerProfile], tick_sec: float = 0.01
 ) -> AllocationResult:
     """Sequential greedy allocation considering immediate transfer, queue backlog, and capacity constraints."""
     allocation: list[ServerId] = []
@@ -54,12 +53,13 @@ def compute_gbfs(
 
             # Combined estimated latency: Network RTT + Transmission + Queued Backlog + CPU Execution
             est_latency = round(net_ms + trans_ms + queue_est_ms + proc_ms, 2)
-            score = round(net_ms + trans_ms + (queue_est_ms * 0.8) + (proc_ms * 0.5), 2)
+            score = round(net_ms + trans_ms + (queue_est_ms * 0.01) + (proc_ms * 0.1), 2)
             res_avail = round(max(0.0, (1.0 - ((server_ram_used[s_id] + task.ram_demand_mb) / profile.max_ram_mb)) * 100), 1) if single_fit else 0.0
 
-            candidates[s_id.value] = {
-                "server_id": s_id.value,
-                "label": "Edge Server A" if s_id == ServerId.EDGE else "Cloud Server B",
+            server_id = s_id.value if isinstance(s_id, ServerId) else str(s_id)
+            candidates[server_id] = {
+                "server_id": server_id,
+                "label": server_id,
                 "latency_ms": est_latency,
                 "proc_time_ms": proc_ms,
                 "queue_est_ms": queue_est_ms,
@@ -73,24 +73,27 @@ def compute_gbfs(
 
         if not feasible_servers:
             # If both exceed soft batch limits, pick Cloud (highest hardware capacity)
-            selected_server = ServerId.CLOUD
-            reason = "Edge capacity limit reached (RAM/Storage/Queue); allocated to Cloud Server B."
+            selected_server = max(
+                profiles,
+                key=lambda server_id: (
+                    profiles[server_id].max_ram_mb,
+                    profiles[server_id].storage_mb,
+                    profiles[server_id].processing_speed,
+                ),
+            )
+            reason = f"No server met the batch constraints; allocated to {selected_server}."
         else:
             # Greedy choice: minimize total heuristic score (considering latency, backlog, and speed)
             selected_server = min(
                 feasible_servers,
-                key=lambda s_id: candidates[s_id.value]["heuristic_score"],
+                key=lambda s_id: candidates[
+                    s_id.value if isinstance(s_id, ServerId) else str(s_id)
+                ]["heuristic_score"],
             )
-            if selected_server == ServerId.EDGE:
-                edge_score = candidates[ServerId.EDGE.value]["heuristic_score"]
-                reason = f"Edge selected with lower heuristic score ({edge_score}) and immediate network response."
-            else:
-                cloud_score = candidates[ServerId.CLOUD.value]["heuristic_score"]
-                edge_queue = candidates.get(ServerId.EDGE.value, {}).get("queue_est_ms", 0)
-                if edge_queue > 0:
-                    reason = f"Cloud selected ({cloud_score}) to avoid Edge queue backlog ({edge_queue} ms)."
-                else:
-                    reason = f"Cloud selected with faster processing capability ({cloud_score})."
+            selected_score = candidates[
+                selected_server.value if isinstance(selected_server, ServerId) else str(selected_server)
+            ]["heuristic_score"]
+            reason = f"{selected_server} selected with the lowest feasible heuristic score ({selected_score})."
 
         # Update running server state
         allocation.append(selected_server)
@@ -108,7 +111,11 @@ def compute_gbfs(
             "task_id": task.task_id,
             "task_name": task.task_name or task.task_id,
             "candidates": candidates,
-            "selected_server": selected_server.value,
+                "selected_server": (
+                    selected_server.value
+                    if isinstance(selected_server, ServerId)
+                    else str(selected_server)
+                ),
             "decision_reason": reason,
         })
 
@@ -127,7 +134,7 @@ def _fitness(result: object) -> tuple[float, float, float, float]:
 
 def compute_pso(
     tasks: list[Task],
-    profiles: Mapping[ServerId, ServerProfile],
+    profiles: Mapping[str, ServerProfile],
     *,
     seed: int = 12345,
     particles: int = 12,
@@ -135,7 +142,7 @@ def compute_pso(
     threshold: float = 0.5,
     tick_sec: float = 0.01,
 ) -> AllocationResult:
-    """Search Edge/Cloud allocations using deterministic continuous PSO."""
+    """Search allocations across all configured servers using deterministic continuous PSO."""
     if particles < 2 or iterations < 1:
         raise ValueError("particles must be at least two and iterations must be positive")
     if not 0.0 <= threshold <= 1.0:
@@ -143,11 +150,12 @@ def compute_pso(
 
     randomizer = random.Random(seed)
     simulator = DiscreteEventSimulator(profiles, tick_sec)
+    server_ids = list(profiles)
     dimensions = len(tasks)
     telemetry: list[dict] = []
 
     def allocate(position: list[float]) -> list[ServerId]:
-        return [ServerId.CLOUD if value >= threshold else ServerId.EDGE for value in position]
+        return [server_ids[min(int(value * len(server_ids)), len(server_ids) - 1)] for value in position]
 
     def evaluate(position: list[float]) -> object:
         return simulator.simulate(tasks, allocate(position))
@@ -174,7 +182,7 @@ def compute_pso(
         part_summaries = []
         for p in swarm[:4]:
             pos_ratio = sum(p["position"]) / max(1, dimensions)
-            leaning = "Cloud Server B" if pos_ratio >= 0.5 else "Edge Server A"
+            leaning = server_ids[min(int(pos_ratio * len(server_ids)), len(server_ids) - 1)]
             fit_val = round(p["result"].total_completed_latency_sec + (p["result"].failed_count * 10.0), 3)
             part_summaries.append({
                 "name": p["id"],
@@ -184,17 +192,18 @@ def compute_pso(
             })
         best_x = round(sum(global_position) / max(1, dimensions), 3)
         best_fit = round(global_result.total_completed_latency_sec + (global_result.failed_count * 10.0), 3)
-        edge_count = sum(1 for value in global_position if value < threshold)
-        cloud_count = len(global_position) - edge_count
+        allocation = [server_ids[min(int(value * len(server_ids)), len(server_ids) - 1)] for value in global_position]
+        allocation_counts = {server_id: allocation.count(server_id) for server_id in server_ids}
         return {
             "iteration": iter_num,
             "total_iterations": iterations,
             "best_fitness": best_fit,
             "best_x": best_x,
-            "recommended_server": "SERVER_B" if best_x >= 0.5 else "SERVER_A",
-            "global_allocation": ["SERVER_B" if value >= threshold else "SERVER_A" for value in global_position],
-            "edge_task_count": edge_count,
-            "cloud_task_count": cloud_count,
+            "recommended_server": max(allocation_counts, key=allocation_counts.get),
+            "global_allocation": allocation,
+            "allocation_counts": allocation_counts,
+            "edge_task_count": allocation_counts.get(ServerId.EDGE.value, 0),
+            "cloud_task_count": allocation_counts.get(ServerId.CLOUD.value, 0),
             "particles": part_summaries,
         }
 
@@ -228,6 +237,6 @@ def compute_pso(
 
         telemetry.append(build_iter_snapshot(iter_idx))
 
-    allocation = tuple(ServerId.CLOUD if value >= threshold else ServerId.EDGE for value in global_position)
+    allocation = tuple(server_ids[min(int(value * len(server_ids)), len(server_ids) - 1)] for value in global_position)
     return AllocationResult(allocation, global_result, iterations, telemetry=telemetry)
 

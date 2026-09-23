@@ -57,6 +57,7 @@ services:
       REDIS_URL: redis://redis:6379/0
       SIMULATION_RUN_TIMEOUT_SEC: ${SIMULATION_RUN_TIMEOUT_SEC:-3600}
       MAX_BATCH_SIZE: ${MAX_BATCH_SIZE:-15}
+      SIMULATION_SERVER_PROFILES_FILE: /app/config/server_profiles.json
     depends_on:
       postgres:
         condition: service_healthy
@@ -70,13 +71,14 @@ services:
     networks:
       - taskoffloading-net
 
-  gbfs-edge:
+  gbfs-worker:
     image: snits/taskoffloading-simulation-worker:latest
     restart: always
     command: ["python", "-m", "simulation_backend.worker"]
     environment:
       REDIS_URL: redis://redis:6379/0
-      SIMULATION_OWNER: "GBFS:SERVER_A"
+      SIMULATION_ALGORITHM: "GBFS"
+      SIMULATION_SERVER_PROFILES_FILE: /app/config/server_profiles.json
       SIMULATION_TIME_SCALE: ${SIMULATION_TIME_SCALE:-0.05}
       SIMULATION_EVENT_DELAY_SEC: ${SIMULATION_EVENT_DELAY_SEC:-0.02}
       SIMULATION_EXECUTION_TICK_SEC: ${SIMULATION_EXECUTION_TICK_SEC:-0.01}
@@ -86,45 +88,14 @@ services:
     networks:
       - taskoffloading-net
 
-  gbfs-cloud:
+  pso-worker:
     image: snits/taskoffloading-simulation-worker:latest
     restart: always
     command: ["python", "-m", "simulation_backend.worker"]
     environment:
       REDIS_URL: redis://redis:6379/0
-      SIMULATION_OWNER: "GBFS:SERVER_B"
-      SIMULATION_TIME_SCALE: ${SIMULATION_TIME_SCALE:-0.05}
-      SIMULATION_EVENT_DELAY_SEC: ${SIMULATION_EVENT_DELAY_SEC:-0.02}
-      SIMULATION_EXECUTION_TICK_SEC: ${SIMULATION_EXECUTION_TICK_SEC:-0.01}
-    depends_on:
-      redis:
-        condition: service_healthy
-    networks:
-      - taskoffloading-net
-
-  pso-edge:
-    image: snits/taskoffloading-simulation-worker:latest
-    restart: always
-    command: ["python", "-m", "simulation_backend.worker"]
-    environment:
-      REDIS_URL: redis://redis:6379/0
-      SIMULATION_OWNER: "PSO:SERVER_A"
-      SIMULATION_TIME_SCALE: ${SIMULATION_TIME_SCALE:-0.05}
-      SIMULATION_EVENT_DELAY_SEC: ${SIMULATION_EVENT_DELAY_SEC:-0.02}
-      SIMULATION_EXECUTION_TICK_SEC: ${SIMULATION_EXECUTION_TICK_SEC:-0.01}
-    depends_on:
-      redis:
-        condition: service_healthy
-    networks:
-      - taskoffloading-net
-
-  pso-cloud:
-    image: snits/taskoffloading-simulation-worker:latest
-    restart: always
-    command: ["python", "-m", "simulation_backend.worker"]
-    environment:
-      REDIS_URL: redis://redis:6379/0
-      SIMULATION_OWNER: "PSO:SERVER_B"
+      SIMULATION_ALGORITHM: "PSO"
+      SIMULATION_SERVER_PROFILES_FILE: /app/config/server_profiles.json
       SIMULATION_TIME_SCALE: ${SIMULATION_TIME_SCALE:-0.05}
       SIMULATION_EVENT_DELAY_SEC: ${SIMULATION_EVENT_DELAY_SEC:-0.02}
       SIMULATION_EXECUTION_TICK_SEC: ${SIMULATION_EXECUTION_TICK_SEC:-0.01}

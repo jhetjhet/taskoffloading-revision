@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import axios from "axios";
 import { useT } from "../../context/ThemeContext";
+import { getServerShortLabel } from "../../utils/serverLabels";
 import { AlgoServerGroup } from "./AlgoServerGroup";
 
 const simulationApi = axios.create({ baseURL: import.meta.env.VITE_API_URL || "/api/v1" });
@@ -179,8 +180,11 @@ export const ServerMonitorPanel = ({ liveUsage = {} }) => {
         {/* Right side: compact per-algo status dots */}
         <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
           {Object.entries(grouped).map(([algoKey, srvList]) => {
-            const meta = ALGO_META[algoKey];
-            if (!meta) return null;
+            const meta = ALGO_META[algoKey] || {
+              label: `${algoKey} — configured worker`,
+              shortLabel: algoKey,
+              accentColor: T.muted,
+            };
             return (
               <div
                 key={algoKey}
@@ -215,7 +219,7 @@ export const ServerMonitorPanel = ({ liveUsage = {} }) => {
                           fontFamily: T.fontMono,
                         }}
                       >
-                        {srv.placement === "EDGE" ? "E" : "C"}
+                        {getServerShortLabel(srv.server_id || srv.id || srv.name)}
                       </span>
                     </div>
                   );
@@ -243,6 +247,7 @@ export const ServerMonitorPanel = ({ liveUsage = {} }) => {
         style={{
           overflow: "hidden",
           maxHeight: open ? 500 : 0,
+          overflowY: open ? "auto" : "hidden",
           transition: "max-height 0.35s cubic-bezier(.4,0,.2,1)",
         }}
       >

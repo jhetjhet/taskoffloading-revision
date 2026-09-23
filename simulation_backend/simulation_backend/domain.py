@@ -28,7 +28,7 @@ class TaskStatus(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class ServerProfile:
-    server_id: ServerId
+    server_id: str
     network_latency_ms: float
     processing_speed: float
     storage_mb: float
@@ -36,6 +36,8 @@ class ServerProfile:
     cpu_cores: int
     bandwidth_mb_s: float
     energy_coefficient: float = 0.05
+    name: str = ""
+    placement: str = ""
 
     @property
     def cpu_capacity_percent(self) -> float:
@@ -99,7 +101,7 @@ class Task:
 @dataclass(frozen=True, slots=True)
 class TaskResult:
     task_id: str
-    assigned_server: ServerId
+    assigned_server: str
     status: TaskStatus
     transmission_time_sec: float
     queue_wait_time_sec: float

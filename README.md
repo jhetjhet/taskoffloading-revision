@@ -30,13 +30,17 @@ The simulation environment runs as a multi-container microservice system orchest
                         │ - Worker Pub/Sub │   │ - Task templates   │
                         +--------+---------+   │ - Runs & analytics │
                                  |             +--------------------+
-         +-----------------------+-----------------------+-----------------------+
-         |                       |                       |                       |
-         v                       v                       v                       v
-+-----------------+     +-----------------+     +-----------------+     +-----------------+
-|    gbfs-edge    |     |   gbfs-cloud    |     |    pso-edge     |     |    pso-cloud    |
-|  (GBFS:SERVER_A)|     |  (GBFS:SERVER_B)|     |  (PSO:SERVER_A) |     |  (PSO:SERVER_B) |
-+-----------------+     +-----------------+     +-----------------+     +-----------------+
+                  +-----------------------+-----------------------+
+                                    |
+                                    v
+                       +----------------+----------------+
+                       |                               |
+                       v                               v
+               +---------------------+          +---------------------+
+               |     gbfs-worker     |          |      pso-worker      |
+               |  GBFS: configured   |          |  PSO: configured    |
+               |  server profiles    |          |  server profiles    |
+               +---------------------+          +---------------------+
 ```
 
 ### Core Components
@@ -47,15 +51,45 @@ The simulation environment runs as a multi-container microservice system orchest
 2. **Simulation API (`simulation_backend/`)**: FastAPI application providing REST routes, Socket.IO rooms, and telemetry broadcasting.
 3. **Database (`PostgreSQL 16`)**: Stores registered machines, task templates, simulation run records, and task telemetry logs.
 4. **Message Broker (`Redis 7`)**: Bridges command queues and event streams between the simulation API and worker containers.
-5. **Worker Nodes (4 Dedicated Containers)**:
-   - `gbfs-edge` (`GBFS:SERVER_A`): Simulates edge processing for GBFS-assigned tasks.
-   - `gbfs-cloud` (`GBFS:SERVER_B`): Simulates cloud processing for GBFS-assigned tasks.
-   - `pso-edge` (`PSO:SERVER_A`): Simulates edge processing for PSO-assigned tasks.
-   - `pso-cloud` (`PSO:SERVER_B`): Simulates cloud processing for PSO-assigned tasks.
+5. **Worker Nodes (2 Generic Containers)**:
+   - `gbfs-worker`: Handles GBFS commands for every configured server profile.
+   - `pso-worker`: Handles PSO commands for every configured server profile.
+   Worker capacity is separated by algorithm, while server identity and hardware behavior come from the shared profile catalog.
 
 ---
 
 ## 2. Server Specifications & Profiles
+
+Server registration is configuration-driven. The default catalog lives at
+`simulation_backend/config/server_profiles.json` and is loaded by the API,
+algorithms, analytics, and workers. Add or remove a server by editing that JSON
+object and rebuilding or restarting the backend containers. The optimization
+algorithms do not require server-specific code changes.
+
+Each configured server must provide a unique ID, `name`, `placement`, and the
+numeric profile fields shown below. IDs may contain letters, numbers, `_`, and
+`-`, but `LOCAL_MACHINE` is reserved for the local baseline.
+
+Example third server:
+
+```json
+"SERVER_C": {
+   "name": "Regional GPU",
+   "placement": "REGIONAL",
+   "network_latency_ms": 20.0,
+   "processing_speed": 4.0,
+   "storage_mb": 2000.0,
+   "max_ram_mb": 4000.0,
+   "cpu_cores": 16,
+   "bandwidth_mb_s": 500.0,
+   "energy_coefficient": 0.02
+}
+```
+
+The file can be overridden with `SIMULATION_SERVER_PROFILES_FILE`, or the
+complete JSON object can be supplied through `SIMULATION_SERVER_PROFILES`.
+Both variables must be supplied consistently to the API and worker containers.
+Server removal affects new runs; historical run allocations remain stored.
 
 Each server profile models physical compute constraints, network properties, and energy coefficients:
 
@@ -252,11 +286,61 @@ Base URL: `http://localhost:8000` (or `/api/v1` via frontend reverse proxy).
 #### `GET /api/v1/runs/{run_id}/analytics`
 Returns structured report data containing:
 - `raw_performance`: Latency, processing time, throughput, CPU%, RAM, storage, queue depth.
+- `server_activity_summary`: Per-batch server activity for both algorithms, including task assignment, completion/failure counts, average latency, queue wait, CPU usage, and memory usage for every configured server ID.
 - `radar_comparison`: 5-dimensional normalized scores (Latency, Processing, Throughput, Energy, Utilization).
 - `baseline_improvement`: Percentage improvements compared to local execution baseline.
 - `tradeoffs`: Energy donut metrics, bubble chart points, and recommended server allocation.
 - `experiment_validation`: Predicted vs. actual measured latency with percentage deviation.
 - `research_conclusion`: Algorithm recommendation and summary conclusions.
+
+The analytics response is scoped to one simulation batch. Its server activity section has the following shape:
+
+```json
+{
+   "run_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+   "status": "COMPLETED",
+   "analytics": {
+      "server_activity_summary": {
+         "GBFS": {
+            "algorithm": "GBFS",
+            "total_tasks": 12,
+            "servers": {
+               "SERVER_A": {
+                  "assigned_tasks": 7,
+                  "finished_tasks": 7,
+                  "failed_tasks": 0,
+                  "avg_latency_ms": 123.45,
+                  "avg_queue_wait_ms": 12.34,
+                  "avg_cpu_utilization_pct": 55.0,
+                  "avg_memory_usage_mb": 200.0,
+                  "avg_storage_utilization_pct": 0.0
+               },
+               "SERVER_B": {
+                  "assigned_tasks": 5,
+                  "finished_tasks": 5,
+                  "failed_tasks": 0,
+                  "avg_latency_ms": 98.76,
+                  "avg_queue_wait_ms": 8.12,
+                  "avg_cpu_utilization_pct": 60.0,
+                  "avg_memory_usage_mb": 250.0,
+                  "avg_storage_utilization_pct": 0.0
+               }
+            }
+         },
+         "PSO": {
+            "algorithm": "PSO",
+            "total_tasks": 12,
+            "servers": {
+               "SERVER_A": { "assigned_tasks": 6, "finished_tasks": 6, "failed_tasks": 0 },
+               "SERVER_B": { "assigned_tasks": 6, "finished_tasks": 6, "failed_tasks": 0 }
+            }
+         }
+      }
+   }
+}
+```
+
+The default catalog uses `SERVER_A` for the edge profile and `SERVER_B` for the cloud profile. Custom server IDs appear in the same `servers` object with the same metric fields.
 
 ---
 
@@ -322,7 +406,7 @@ The database is seeded from CSV templates (`simulation_backend/data/`):
 
 4. **Start API and Simulation Workers**:
    ```bash
-   docker compose up -d --build simulation-api gbfs-edge gbfs-cloud pso-edge pso-cloud
+   docker compose up -d --build simulation-api gbfs-worker pso-worker
    ```
 
 5. **Start Frontend Dashboard**:

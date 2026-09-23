@@ -1,6 +1,7 @@
 import React from "react";
 import { useT } from "../../../context/ThemeContext";
 import { Card, EvalTh } from "../../common";
+import { formatServerLabel, getServerColor, getServerCounts } from "../../../utils/serverLabels";
 import { StepPipeline } from "./StepPipeline";
 import { PSOTrack } from "./PSOTrack";
 
@@ -22,17 +23,12 @@ export const PSOExecutionPanel = ({ currentStep, allSteps = [], isRunning }) => 
   const totalIters = activeStep?.total_iterations ?? 40;
   const bestFit = activeStep?.best_fitness ?? 0;
   const bestX = activeStep?.best_x ?? 0;
-  const edgeTaskCount = activeStep?.edge_task_count ?? 0;
-  const cloudTaskCount = activeStep?.cloud_task_count ?? 0;
   const allocation = activeStep?.global_allocation || [];
-  const allocationTitle = edgeTaskCount > 0 && cloudTaskCount > 0
-    ? "mixed allocation"
-    : cloudTaskCount > 0
-    ? "Cloud Server B"
-    : "Edge Server A";
-  // const allocationLabel = allocation.length
-  //   ? allocation.map((server, index) => `${index + 1}:${server === "SERVER_B" ? "Cloud" : "Edge"}`).join(" · ")
-  //   : "Awaiting allocation";
+  const allocationCounts = activeStep?.allocation_counts || getServerCounts(allocation);
+  const serverIds = Object.keys(allocationCounts);
+  const allocationTitle = Object.keys(allocationCounts).length
+    ? Object.entries(allocationCounts).map(([server, count]) => `${formatServerLabel(server)} (${count})`).join(" / ")
+    : "Awaiting allocation";
   const particles = activeStep?.particles || [];
 
   const done = allSteps.length > 0 && iterNum >= totalIters;
@@ -61,14 +57,14 @@ export const PSOExecutionPanel = ({ currentStep, allSteps = [], isRunning }) => 
         {activeStep ? (
           <>
             Iteration <strong style={{ color: T.purple }}>{iterNum}</strong> / {totalIters} · global best fitness{" "}
-              <strong style={{ color: T.purple }}>{bestFit}</strong> · Edge {edgeTaskCount} / Cloud {cloudTaskCount}
+              <strong style={{ color: T.purple }}>{bestFit}</strong> · active allocations {allocationTitle}
           </>
         ) : (
           "Awaiting swarm convergence…"
         )}
       </div>
 
-      <PSOTrack bestX={bestX} particles={particles} />
+      <PSOTrack bestX={bestX} particles={particles} serverIds={serverIds} />
 
       <table style={{ width: "100%", borderCollapse: "collapse", marginTop: 8 }}>
         <thead>
@@ -121,7 +117,7 @@ export const PSOExecutionPanel = ({ currentStep, allSteps = [], isRunning }) => 
                     padding: "6px 8px",
                     fontFamily: T.fontMono,
                     fontSize: 13,
-                    color: p.leaning.includes("Cloud") ? T.purple : T.green,
+                    color: getServerColor(p.leaning),
                     borderBottom: `1px solid ${T.borderSub}`,
                   }}
                 >

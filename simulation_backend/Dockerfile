@@ -3,6 +3,7 @@ FROM python:3.12-slim
 WORKDIR /app
 COPY pyproject.toml ./
 COPY simulation_backend ./simulation_backend
+COPY config ./config
 COPY data ./data
 COPY db ./db
 RUN pip install --no-cache-dir .

@@ -1,5 +1,6 @@
 import React from "react";
 import { Badge, Card, TableRow, Th } from "../../common";
+import { formatServerLabel } from "../../../utils/serverLabels";
 
 const statusColor = (status) => ({ FINISHED: "green", FAILED: "red" }[status] || "amber");
 const seconds = (value) => `${Number(value || 0).toFixed(2)} s`;
@@ -17,7 +18,7 @@ export const AlgorithmReportTable = ({ algorithm, tasks, T }) => (
               <span>{index + 1}</span>,
               <span title={task.task_id}>{task.task_id}</span>,
               <Badge color={statusColor(task.status)} dot>{task.status}</Badge>,
-              <span>{algorithm}:{task.assigned_server}</span>,
+              <span>{task.assigned_server ? formatServerLabel(task.assigned_server) : "Unassigned"}</span>,
               <span>{seconds(task.transmission_time_sec)}</span>,
               <span>{seconds(task.queue_wait_time_sec)}</span>,
               <span>{seconds(task.execution_time_sec)}</span>,

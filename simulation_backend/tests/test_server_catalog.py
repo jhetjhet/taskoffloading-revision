@@ -1,8 +1,12 @@
+from dataclasses import replace
+
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from simulation_backend.api import RunRequest, app
+from simulation_backend.engine import DiscreteEventSimulator
+from simulation_backend.server_catalog import load_profiles
 
 client = TestClient(app)
 
@@ -24,6 +28,43 @@ def test_ping_server_uses_algorithm_specific_id() -> None:
     assert response.status_code == 200
     assert response.json()["server_id"] == "GBFS:SERVER_A"
     assert response.json()["status"] == "reachable"
+
+
+def test_custom_profile_configuration_loads_arbitrary_server(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(
+        "SIMULATION_SERVER_PROFILES",
+        '{"SERVER_C":{"name":"Regional GPU","placement":"REGIONAL",'
+        '"network_latency_ms":20,"processing_speed":4,"storage_mb":2000,'
+        '"max_ram_mb":4000,"cpu_cores":16,"bandwidth_mb_s":500,'
+        '"energy_coefficient":0.02}}',
+    )
+
+    profiles = load_profiles()
+
+    assert list(profiles) == ["SERVER_C"]
+    assert profiles["SERVER_C"].name == "Regional GPU"
+    assert profiles["SERVER_C"].placement == "REGIONAL"
+
+
+def test_engine_emits_events_for_custom_string_server_id() -> None:
+    profiles = load_profiles()
+    server = profiles["SERVER_A"]
+    task = {
+        "task_id": "custom-server-task",
+        "payload_size_mb": 1.0,
+        "processing_duration_sec": 0.01,
+        "cpu_demand_percent": 10.0,
+        "ram_demand_mb": 10.0,
+        "max_tolerable_latency_sec": 10.0,
+    }
+    from simulation_backend.domain import Task
+
+    events: list[dict] = []
+    DiscreteEventSimulator({"SERVER_C": replace(server, server_id="SERVER_C")}).simulate(
+        [Task(**task)], ["SERVER_C"], on_event=events.append
+    )
+
+    assert events[0]["task"]["server"] == "SERVER_C"
 
 
 def test_run_request_accepts_custom_computation_properties() -> None:

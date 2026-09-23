@@ -1,6 +1,7 @@
 import React from "react";
 import { useT } from "../../../context/ThemeContext";
 import { Card, EvalTh } from "../../common";
+import { formatServerLabel, getServerCounts } from "../../../utils/serverLabels";
 import { StepPipeline } from "./StepPipeline";
 import { TermLine } from "./TermLine";
 
@@ -17,35 +18,21 @@ export const GBFSExecutionPanel = ({ currentStep, allSteps = [], totalTasks, tas
 
   const activeStep = currentStep || allSteps[allSteps.length - 1];
   const candidates = activeStep?.candidates || {};
-  const candA = candidates["SERVER_A"];
-  const candB = candidates["SERVER_B"];
   const selectedServer = activeStep?.selected_server;
 
   const totalCount = totalTasks || tasks.length || allSteps.length;
   const isBatchDone = allSteps.length > 0 && allSteps.length >= totalCount;
-
-  // Aggregate batch distribution from GBFS steps
-  const edgeCount = allSteps.filter((s) => s.selected_server === "SERVER_A").length;
-  const cloudCount = allSteps.filter((s) => s.selected_server === "SERVER_B").length;
-  // const allocationSummary = allSteps.map((s, i) => `${i + 1}:${s.selected_server === "SERVER_B" ? "Cloud" : "Edge"}`).join(" · ");
+  const distribution = getServerCounts(allSteps.map((step) => step.selected_server).filter(Boolean));
+  const allocationSummary = Object.entries(distribution).map(([server, count]) => `${formatServerLabel(server)} (${count})`).join(" · ") || "No allocations";
 
   const stage = isBatchDone ? 5 : activeStep ? 4 : isRunning ? 2 : 0;
   const pipelineIdx = stage >= 5 ? 4 : Math.max(0, stage - 1);
-
-  const rows = [
-    {
-      key: "SERVER_A",
-      label: "Edge Server A",
-      data: candA,
-      selected: selectedServer === "SERVER_A",
-    },
-    {
-      key: "SERVER_B",
-      label: "Cloud Server B",
-      data: candB,
-      selected: selectedServer === "SERVER_B",
-    },
-  ];
+  const rows = Object.entries(candidates).map(([serverKey, candidate]) => ({
+    key: serverKey,
+    label: formatServerLabel(serverKey),
+    data: candidate,
+    selected: selectedServer === serverKey,
+  }));
 
   return (
     <Card
@@ -157,7 +144,7 @@ export const GBFSExecutionPanel = ({ currentStep, allSteps = [], totalTasks, tas
       </TermLine>
       <TermLine done={Boolean(selectedServer)} color={T.blue}>
         {selectedServer
-          ? `Assigned Task ${activeStep.task_index + 1} to ${selectedServer === "SERVER_A" ? "Edge Server A" : "Cloud Server B"}`
+          ? `Assigned Task ${activeStep.task_index + 1} to ${formatServerLabel(selectedServer)}`
           : "Selecting best heuristic option..."}
       </TermLine>
 
@@ -189,7 +176,7 @@ export const GBFSExecutionPanel = ({ currentStep, allSteps = [], totalTasks, tas
           <div style={{ fontSize: 13, fontFamily: T.fontMono, color: T.text }}>
             Assigned:{" "}
             <strong>
-              {selectedServer === "SERVER_A" ? "⚡ Edge Server A" : "☁️ Cloud Server B"}
+              {formatServerLabel(selectedServer)}
             </strong>
           </div>
           <div style={{ fontSize: 12, color: T.muted, fontFamily: T.fontSans, marginTop: 4 }}>
@@ -224,7 +211,7 @@ export const GBFSExecutionPanel = ({ currentStep, allSteps = [], totalTasks, tas
             GBFS Batch Allocation Complete
           </div>
           <div style={{ fontSize: 13, fontFamily: T.fontMono, color: T.text }}>
-            Distribution: <strong>Edge ({edgeCount})</strong> / <strong>Cloud ({cloudCount})</strong> across {allSteps.length} tasks
+            Distribution: <strong>{allocationSummary}</strong> across {allSteps.length} tasks
           </div>
           {/* <div style={{ marginTop: 6, fontSize: 11, color: T.muted, fontFamily: T.fontMono, lineHeight: 1.5 }}>
             Batch assignments: {allocationSummary}

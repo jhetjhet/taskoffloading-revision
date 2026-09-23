@@ -16,9 +16,10 @@ from pydantic import BaseModel, Field
 from .algorithms import compute_gbfs, compute_pso
 from .analytics import generate_analytics_report
 from .database import connect
-from .domain import CLOUD_PROFILE, EDGE_PROFILE, ServerId, Task, WorkerServerId
+from .domain import Task
+from .server_catalog import OFFLOAD_PROFILES, server_key
 
-PROFILES = {ServerId.EDGE: EDGE_PROFILE, ServerId.CLOUD: CLOUD_PROFILE}
+PROFILES = OFFLOAD_PROFILES
 sio = socketio.AsyncServer(async_mode="asgi", cors_allowed_origins="*")
 
 
@@ -107,75 +108,43 @@ async def health() -> dict[str, str]:
 
 @app.get("/api/v1/servers")
 async def servers() -> list[dict[str, object]]:
-    workers = (
+    return [
         {
-            "server_id": WorkerServerId.GBFS_EDGE.value,
-            "algorithm": "GBFS",
-            "placement": "EDGE",
-            "name": "GBFS Edge",
-            "network_latency_ms": EDGE_PROFILE.network_latency_ms,
-            "processing_speed": EDGE_PROFILE.processing_speed,
-            "storage_mb": EDGE_PROFILE.storage_mb,
-            "max_ram_mb": EDGE_PROFILE.max_ram_mb,
-            "cpu_cores": EDGE_PROFILE.cpu_cores,
-            "bandwidth_mb_s": EDGE_PROFILE.bandwidth_mb_s,
-        },
-        {
-            "server_id": WorkerServerId.GBFS_CLOUD.value,
-            "algorithm": "GBFS",
-            "placement": "CLOUD",
-            "name": "GBFS Cloud",
-            "network_latency_ms": CLOUD_PROFILE.network_latency_ms,
-            "processing_speed": CLOUD_PROFILE.processing_speed,
-            "storage_mb": CLOUD_PROFILE.storage_mb,
-            "max_ram_mb": CLOUD_PROFILE.max_ram_mb,
-            "cpu_cores": CLOUD_PROFILE.cpu_cores,
-            "bandwidth_mb_s": CLOUD_PROFILE.bandwidth_mb_s,
-        },
-        {
-            "server_id": WorkerServerId.PSO_EDGE.value,
-            "algorithm": "PSO",
-            "placement": "EDGE",
-            "name": "PSO Edge",
-            "network_latency_ms": EDGE_PROFILE.network_latency_ms,
-            "processing_speed": EDGE_PROFILE.processing_speed,
-            "storage_mb": EDGE_PROFILE.storage_mb,
-            "max_ram_mb": EDGE_PROFILE.max_ram_mb,
-            "cpu_cores": EDGE_PROFILE.cpu_cores,
-            "bandwidth_mb_s": EDGE_PROFILE.bandwidth_mb_s,
-        },
-        {
-            "server_id": WorkerServerId.PSO_CLOUD.value,
-            "algorithm": "PSO",
-            "placement": "CLOUD",
-            "name": "PSO Cloud",
-            "network_latency_ms": CLOUD_PROFILE.network_latency_ms,
-            "processing_speed": CLOUD_PROFILE.processing_speed,
-            "storage_mb": CLOUD_PROFILE.storage_mb,
-            "max_ram_mb": CLOUD_PROFILE.max_ram_mb,
-            "cpu_cores": CLOUD_PROFILE.cpu_cores,
-            "bandwidth_mb_s": CLOUD_PROFILE.bandwidth_mb_s,
-        },
-    )
-    return list(workers)
+            "server_id": f"{algorithm}:{_server_key(server_id)}",
+            "algorithm": algorithm,
+            "placement": profile.placement or _server_key(server_id),
+            "name": profile.name or f"{algorithm} {_server_key(server_id)}",
+            "profile_id": _server_key(server_id),
+            "network_latency_ms": profile.network_latency_ms,
+            "processing_speed": profile.processing_speed,
+            "storage_mb": profile.storage_mb,
+            "max_ram_mb": profile.max_ram_mb,
+            "cpu_cores": profile.cpu_cores,
+            "bandwidth_mb_s": profile.bandwidth_mb_s,
+        }
+        for algorithm in ("GBFS", "PSO")
+        for server_id, profile in PROFILES.items()
+    ]
 
 
 @app.get("/api/v1/servers/ping/{server_id}")
 async def ping_server(server_id: str) -> dict[str, object]:
-    valid = {member.value for member in WorkerServerId}
-    if server_id not in valid:
+    try:
+        algorithm, raw_server = server_id.split(":", 1)
+    except ValueError:
         raise HTTPException(status_code=404, detail=f"unknown server_id: {server_id}")
-
-    if server_id in {WorkerServerId.GBFS_EDGE.value, WorkerServerId.PSO_EDGE.value}:
-        latency_ms = EDGE_PROFILE.network_latency_ms
-    else:
-        latency_ms = CLOUD_PROFILE.network_latency_ms
+    profile = next(
+        (candidate for key, candidate in PROFILES.items() if _server_key(key) == raw_server),
+        None,
+    )
+    if algorithm not in {"GBFS", "PSO"} or profile is None:
+        raise HTTPException(status_code=404, detail=f"unknown server_id: {server_id}")
 
     return {
         "server_id": server_id,
         "status": "reachable",
-        "latency_ms": latency_ms,
-        "network_latency_ms": latency_ms,
+        "latency_ms": profile.network_latency_ms,
+        "network_latency_ms": profile.network_latency_ms,
     }
 
 
@@ -276,7 +245,9 @@ async def get_run_analytics(run_id: str) -> dict:
         "SELECT algorithm, task_id, status, total_latency_sec, execution_time_sec FROM task_execution_results WHERE run_id = $1",
         run_id,
     )
-    report_data = generate_analytics_report(tasks, gbfs, pso, [dict(r) for r in actual_rows])
+    report_data = generate_analytics_report(
+        tasks, gbfs, pso, [dict(r) for r in actual_rows], profile_map=PROFILES
+    )
     return {"run_id": run_id, "status": run["status"], "analytics": report_data}
 
 
@@ -349,8 +320,8 @@ async def _execute_run(run_id: str, tasks: list[Task], seed: int) -> None:
             serialized = _serialize_result(result)
             await _persist_result(run_id, algorithm, serialized)
             await _dispatch_workers(run_id, algorithm, tasks, result.allocation)
-            for server in ServerId:
-                await _emit_server_usage_snapshot(run_id, algorithm, server.value, {"TRANSFERRING": 0, "IN_QUEUE": 0, "RUNNING": 0, "FINISHED": 0, "FAILED": 0})
+            for server in PROFILES:
+                await _emit_server_usage_snapshot(run_id, algorithm, _server_key(server), {"TRANSFERRING": 0, "IN_QUEUE": 0, "RUNNING": 0, "FINISHED": 0, "FAILED": 0})
             await _emit_run_event(run_id, "algorithm", {"run_id": run_id, "algorithm": algorithm, **serialized})
 
         # Stream the decision-making traces in real-time so UI visualizes thinking phase
@@ -382,7 +353,9 @@ async def _execute_run(run_id: str, tasks: list[Task], seed: int) -> None:
         actual_task_dicts = [dict(r) for r in actual_rows]
 
         # Generate comprehensive 6-section dashboard analytics report
-        report_data = generate_analytics_report(tasks, gbfs, pso, actual_task_dicts)
+        report_data = generate_analytics_report(
+            tasks, gbfs, pso, actual_task_dicts, profile_map=PROFILES
+        )
 
         # Store analytics JSON in simulation_runs input/summary or output
         await app.state.db.execute(
@@ -408,11 +381,8 @@ async def _execute_run(run_id: str, tasks: list[Task], seed: int) -> None:
             app.state.event_history[run_id] = app.state.event_history[run_id][-5000:]
 
 
-# Maps raw ServerId values to the semantic placement labels the frontend expects.
-_PLACEMENT_LABEL: dict[str, str] = {
-    ServerId.EDGE.value: "EDGE",
-    ServerId.CLOUD.value: "CLOUD",
-}
+def _server_key(server_id: object) -> str:
+    return server_key(server_id)
 
 
 def _build_server_usage_snapshot(server_id: str, algorithm: str, counts: dict[str, int]) -> dict[str, object]:
@@ -429,14 +399,19 @@ def _build_server_usage_snapshot(server_id: str, algorithm: str, counts: dict[st
     if counts.get("FAILED", 0) and tasks_in_flight == 0:
         status = "DEGRADED"
 
-    # "GBFS:SERVER_A" → raw_server = "SERVER_A" → placement = "EDGE"
+    # Resolve metadata from the configured raw server profile.
     raw_server = server_id.rsplit(":", 1)[-1]
-    placement = _PLACEMENT_LABEL.get(raw_server, raw_server)
+    profile = next(
+        (candidate for key, candidate in PROFILES.items() if _server_key(key) == raw_server),
+        None,
+    )
+    placement = profile.placement if profile else raw_server
 
     return {
         "server_id": server_id,
         "algorithm": algorithm,
         "placement": placement,
+        "name": profile.name if profile else raw_server,
         "status": status,
         "tasks_in_flight": tasks_in_flight,
         "queue_depth": counts.get("IN_QUEUE", 0),
@@ -492,24 +467,25 @@ async def _persist_result(run_id: str, algorithm: str, result: dict) -> None:
 
 
 async def _dispatch_workers(run_id: str, algorithm: str, tasks: list[Task], allocation: tuple) -> None:
-    for server in ServerId:
+    for server in PROFILES:
+        server_key = _server_key(server)
         assigned = [asdict(task) for task, target in zip(tasks, allocation) if target == server]
         await app.state.redis.publish(
-            f"simulation:commands:{algorithm}:{server.value}",
-            json.dumps({"run_id": run_id, "algorithm": algorithm, "server": server.value, "tasks": assigned}),
+            f"simulation:commands:{algorithm}:{server_key}",
+            json.dumps({"run_id": run_id, "algorithm": algorithm, "server": server_key, "tasks": assigned}),
         )
 
 
 def _serialize_result(result: object) -> dict:
     return {
-        "allocation": [server.value for server in result.allocation],
+        "allocation": [_server_key(server) for server in result.allocation],
         "iterations_performed": result.iterations_performed,
         "failed_count": result.simulation.failed_count,
         "telemetry": getattr(result, "telemetry", []),
         "tasks": [
             {
                 "task_id": task.task_id,
-                "assigned_server": task.assigned_server.value,
+                "assigned_server": _server_key(task.assigned_server),
                 "status": task.status.value,
                 "transmission_time_sec": task.transmission_time_sec,
                 "queue_wait_time_sec": task.queue_wait_time_sec,

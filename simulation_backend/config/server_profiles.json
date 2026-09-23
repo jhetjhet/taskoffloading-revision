@@ -1,0 +1,35 @@
+{
+  "SERVER_A": {
+    "name": "Edge Server A",
+    "placement": "EDGE",
+    "network_latency_ms": 50.0,
+    "processing_speed": 1.0,
+    "storage_mb": 250.0,
+    "max_ram_mb": 500.0,
+    "cpu_cores": 2,
+    "bandwidth_mb_s": 100.0,
+    "energy_coefficient": 0.08
+  },
+  "SERVER_B": {
+    "name": "Cloud Server B",
+    "placement": "CLOUD",
+    "network_latency_ms": 120.0,
+    "processing_speed": 2.5,
+    "storage_mb": 1000.0,
+    "max_ram_mb": 2000.0,
+    "cpu_cores": 8,
+    "bandwidth_mb_s": 100.0,
+    "energy_coefficient": 0.03
+  },
+  "SERVER_C": {
+    "name": "Local Server",
+    "placement": "LOCAL",
+    "network_latency_ms": 200.0,
+    "processing_speed": 1.0,
+    "storage_mb": 250.0,
+    "max_ram_mb": 500.0,
+    "cpu_cores": 2,
+    "bandwidth_mb_s": 120.0,
+    "energy_coefficient": 0.08
+  }
+}

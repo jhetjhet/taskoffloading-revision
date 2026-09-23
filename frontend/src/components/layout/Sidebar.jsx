@@ -1,12 +1,6 @@
 import React from "react";
 import { useT } from "../../context/ThemeContext";
-
-export const SIDEBAR_STEPS = [
-  { id: "machines", label: "Machines" },
-  { id: "workloads", label: "Workloads" },
-  { id: "offloading", label: "Offloading" },
-  { id: "reports", label: "Reports" },
-];
+import { SIDEBAR_STEPS } from "../../config/constants";
 
 export const Sidebar = ({ view, step, maxReached, onSelectView, onJump }) => {
   const T = useT();

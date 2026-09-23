@@ -1,5 +1,6 @@
 import React from "react";
 import { useT } from "../../../context/ThemeContext";
+import { formatServerLabel, getServerColor, normalizeServerKey } from "../../../utils/serverLabels";
 
 /* ─────────────────────────────────────────────────────────────
    STATUS CONFIG
@@ -34,9 +35,7 @@ const Legend = () => {
       ))}
       <div style={{ display: "flex", alignItems: "center", gap: 4, marginLeft: "auto" }}>
         <div style={{ width: 8, height: 8, borderRadius: 1, background: T.green, opacity: 0.5 }} />
-        <span style={{ fontSize: 10, color: T.dim, fontFamily: T.fontSans }}>Edge</span>
-        <div style={{ width: 8, height: 8, borderRadius: 1, background: T.purple, opacity: 0.5, marginLeft: 6 }} />
-        <span style={{ fontSize: 10, color: T.dim, fontFamily: T.fontSans }}>Cloud</span>
+        <span style={{ fontSize: 10, color: T.dim, fontFamily: T.fontSans }}>Server</span>
       </div>
     </div>
   );
@@ -44,25 +43,20 @@ const Legend = () => {
 
 /* ─────────────────────────────────────────────────────────────
    TASK STRIP  – one row per task
-   Shows: server placement lane (Edge/Cloud) + animated status pill
+  Shows: dynamic server placement lane + animated status pill
 ───────────────────────────────────────────────────────────── */
-const TaskStrip = ({ task, index, accentColor }) => {
+const TaskStrip = ({ task, index }) => {
   const T = useT();
   const cfg = useStatusConfig();
-  const s = cfg[task.status] ?? cfg.PENDING;
 
-  const isEdge = task.assigned_server
-    ? task.assigned_server.includes("SERVER_A") || task.assigned_server === "SERVER_A"
-    : null;
+  const serverKey = normalizeServerKey(task.assigned_server);
+  const serverLabel = serverKey ? formatServerLabel(serverKey) : "Unassigned";
+  const serverColor = serverKey ? getServerColor(serverKey) : T.muted;
 
   const isTerminal = task.status === "FINISHED" || task.status === "FAILED";
   const isActive   = task.status === "RUNNING" || task.status === "TRANSFERRING";
 
   // Latency bar: fill proportional to total_latency_sec (max 10 s for scale)
-  const latencyPct = task.total_latency_sec != null
-    ? Math.min((task.total_latency_sec / 10) * 100, 100)
-    : 0;
-
   return (
     <div
       style={{
@@ -108,8 +102,8 @@ const TaskStrip = ({ task, index, accentColor }) => {
       </span>
 
       {/* Server placement pill (appears when assigned) */}
-      <div style={{ minWidth: 44, flexShrink: 0 }}>
-        {isEdge !== null && (
+      <div style={{ minWidth: 48, flexShrink: 0 }}>
+        {serverKey && (
           <span
             style={{
               fontSize: 9,
@@ -117,14 +111,14 @@ const TaskStrip = ({ task, index, accentColor }) => {
               fontWeight: 700,
               textTransform: "uppercase",
               letterSpacing: "0.06em",
-              color: isEdge ? T.green : T.purple,
-              background: isEdge ? `${T.green}18` : `${T.purple}18`,
-              border: `1px solid ${isEdge ? T.green : T.purple}44`,
+              color: serverColor,
+              background: `${serverColor}18`,
+              border: `1px solid ${serverColor}44`,
               borderRadius: 3,
               padding: "1px 5px",
             }}
           >
-            {isEdge ? "Edge" : "Cloud"}
+            {serverLabel.slice(0, 3)}
           </span>
         )}
       </div>
@@ -207,12 +201,19 @@ const TaskStrip = ({ task, index, accentColor }) => {
    ALLOCATION MAP  – compact grid showing which tasks → which server
    Rendered once the algorithm event arrives (allocation known).
 ───────────────────────────────────────────────────────────── */
-const AllocationMap = ({ tasks, accentColor }) => {
+const AllocationMap = ({ tasks }) => {
   const T = useT();
   if (!tasks.some((t) => t.assigned_server)) return null;
 
-  const edgeTasks  = tasks.filter((t) => t.assigned_server?.includes("SERVER_A"));
-  const cloudTasks = tasks.filter((t) => t.assigned_server?.includes("SERVER_B"));
+  const groupedTasks = tasks.reduce((acc, task) => {
+    const key = normalizeServerKey(task.assigned_server);
+    if (!key) return acc;
+    if (!acc[key]) acc[key] = [];
+    acc[key].push(task);
+    return acc;
+  }, {});
+
+  const serverEntries = Object.entries(groupedTasks);
 
   const Lane = ({ label, color, items }) => (
     <div style={{ flex: 1, minWidth: 0 }}>
@@ -284,9 +285,9 @@ const AllocationMap = ({ tasks, accentColor }) => {
         borderBottom: `1px solid ${T.border}`,
       }}
     >
-      <Lane label="Edge" color={T.green} items={edgeTasks} />
-      <div style={{ width: 1, background: T.border, flexShrink: 0 }} />
-      <Lane label="Cloud" color={T.purple} items={cloudTasks} />
+      {serverEntries.length ? serverEntries.map(([serverKey, items]) => (
+        <Lane key={serverKey} label={formatServerLabel(serverKey)} color={getServerColor(serverKey)} items={items} />
+      )) : <div style={{ fontSize: 10, color: T.dim, fontFamily: T.fontSans }}>No server assignments yet</div>}
     </div>
   );
 };
@@ -407,7 +408,7 @@ export const AlgoLivePanel = ({ algorithm, tasks, running, accentColor }) => {
 
       {/* ── Allocation map (once assignment is known) ── */}
       {hasAllocation && (
-        <AllocationMap tasks={tasks} accentColor={accentColor} />
+        <AllocationMap tasks={tasks} />
       )}
 
       {/* ── Legend ── */}

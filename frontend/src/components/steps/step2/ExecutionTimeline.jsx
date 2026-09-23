@@ -6,7 +6,7 @@ import { useT } from "../../../context/ThemeContext";
  * Represents the 4 stages of the task offloading lifecycle:
  * 1. Workload (IoT Source Machine)
  * 2. Allocation (GBFS + PSO parallel search)
- * 3. Dispatch (Route to Edge/Cloud nodes)
+ * 3. Dispatch (Route to configured server nodes)
  * 4. Execution (Virtual server processing & resolution)
  */
 export const ExecutionTimeline = ({
@@ -31,7 +31,7 @@ export const ExecutionTimeline = ({
     {
       id: "dispatch",
       title: "Dispatch",
-      subtitle: "Route to Edge & Cloud",
+      subtitle: "Route to configured servers",
     },
     {
       id: "execution",
@@ -61,7 +61,6 @@ export const ExecutionTimeline = ({
           : isPast
           ? `${T.green}0e`
           : T.elevated;
-        const textColor = isPast || isCurrent ? T.green : T.dim;
         const titleColor = isPast || isCurrent ? T.text : T.muted;
         const subColor = isPast || isCurrent ? T.muted : T.dim;
 
