@@ -4,8 +4,8 @@
     "placement": "EDGE",
     "network_latency_ms": 50.0,
     "processing_speed": 1.0,
-    "storage_mb": 250.0,
-    "max_ram_mb": 500.0,
+    "storage_mb": 500.0,
+    "max_ram_mb": 1000.0,
     "cpu_cores": 2,
     "bandwidth_mb_s": 100.0,
     "energy_coefficient": 0.08
@@ -24,12 +24,12 @@
   "SERVER_C": {
     "name": "Local Server",
     "placement": "LOCAL",
-    "network_latency_ms": 200.0,
-    "processing_speed": 1.0,
+    "network_latency_ms": 1.0,
+    "processing_speed": 3.0,
     "storage_mb": 250.0,
     "max_ram_mb": 500.0,
     "cpu_cores": 2,
-    "bandwidth_mb_s": 120.0,
+    "bandwidth_mb_s": 1000.0,
     "energy_coefficient": 0.08
   }
 }
